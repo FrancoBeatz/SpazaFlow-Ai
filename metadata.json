@@ -1,0 +1,6 @@
+{
+  "name": "SpazaFlow AI",
+  "description": "Modern South African Township Business Management POS, Inventory POS, Supplier Multi-source Marketplace, and AI Business Assistant.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
