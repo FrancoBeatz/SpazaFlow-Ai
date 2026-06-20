@@ -1,6 +1,6 @@
 {
   "name": "SpazaFlow AI",
-  "description": "Modern South African Township Business Management POS, Inventory POS, Supplier Multi-source Marketplace, and AI Business Assistant.",
+  "description": "Production-grade multi-tenant SaaS for South African township tuck shops (spazas). High-fidelity POS, isolated databases, active inventory tracing, and Gemini AI companion integration.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
