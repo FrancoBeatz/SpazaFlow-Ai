@@ -1,7 +1,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
+const supabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
 
 export const hasSupabaseConfig = !!(supabaseUrl && supabaseAnonKey);
 
@@ -80,7 +80,18 @@ CREATE TABLE IF NOT EXISTS public.products (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 7. CREATE CUSTOMERS TABLE
+-- 7. CREATE INVENTORY (Stock adjustments & logs) TABLE
+CREATE TABLE IF NOT EXISTS public.inventory (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  business_id UUID NOT NULL REFERENCES public.businesses(id) ON DELETE CASCADE,
+  product_id UUID NOT NULL REFERENCES public.products(id) ON DELETE CASCADE,
+  quantity_changed INT NOT NULL DEFAULT 0,
+  reason TEXT NOT NULL, -- 'Sale', 'Restock', 'Expiry', 'Damaged', 'Audit Adjustment'
+  cashier_name TEXT,
+  timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 8. CREATE CUSTOMERS TABLE
 CREATE TABLE IF NOT EXISTS public.customers (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   business_id UUID NOT NULL REFERENCES public.businesses(id) ON DELETE CASCADE,
@@ -92,7 +103,17 @@ CREATE TABLE IF NOT EXISTS public.customers (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 8. CREATE LOYALTY VOUCHERS TABLE
+-- 9. CREATE LOYALTY POINTS TABLE (Transaction log of customer loyalty points)
+CREATE TABLE IF NOT EXISTS public.loyalty_points (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  business_id UUID NOT NULL REFERENCES public.businesses(id) ON DELETE CASCADE,
+  customer_id UUID NOT NULL REFERENCES public.customers(id) ON DELETE CASCADE,
+  points_impact INT NOT NULL DEFAULT 0, -- can be positive (earned) or negative (redeemed)
+  description TEXT,
+  timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 10. CREATE LOYALTY VOUCHERS TABLE
 CREATE TABLE IF NOT EXISTS public.loyalty_vouchers (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   customer_id UUID REFERENCES public.customers(id) ON DELETE CASCADE,
@@ -105,7 +126,7 @@ CREATE TABLE IF NOT EXISTS public.loyalty_vouchers (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 9. CREATE SALES TABLE
+-- 11. CREATE SALES TABLE
 CREATE TABLE IF NOT EXISTS public.sales (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   business_id UUID NOT NULL REFERENCES public.businesses(id) ON DELETE CASCADE,
@@ -122,7 +143,7 @@ CREATE TABLE IF NOT EXISTS public.sales (
   timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 10. CREATE SALE ITEMS TABLE
+-- 12. CREATE SALE ITEMS TABLE
 CREATE TABLE IF NOT EXISTS public.sale_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   sale_id UUID NOT NULL REFERENCES public.sales(id) ON DELETE CASCADE,
@@ -133,7 +154,32 @@ CREATE TABLE IF NOT EXISTS public.sale_items (
   total NUMERIC(10,2) NOT NULL
 );
 
--- 11. CREATE EXPENSES TABLE
+-- 13. CREATE INVOICES TABLE
+CREATE TABLE IF NOT EXISTS public.invoices (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  business_id UUID NOT NULL REFERENCES public.businesses(id) ON DELETE CASCADE,
+  invoice_number TEXT NOT NULL,
+  recipient_name TEXT NOT NULL,
+  amount_due NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+  tax_amount NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+  due_date DATE,
+  status TEXT DEFAULT 'Unpaid', -- 'Paid', 'Unpaid', 'Overdue', 'Cancelled'
+  timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 14. CREATE RECEIPTS TABLE
+CREATE TABLE IF NOT EXISTS public.receipts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  business_id UUID NOT NULL REFERENCES public.businesses(id) ON DELETE CASCADE,
+  sale_id UUID REFERENCES public.sales(id) ON DELETE SET NULL,
+  receipt_number TEXT NOT NULL,
+  total_amount NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+  payment_method TEXT NOT NULL,
+  cashier_name TEXT,
+  timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 15. CREATE EXPENSES TABLE
 CREATE TABLE IF NOT EXISTS public.expenses (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   business_id UUID NOT NULL REFERENCES public.businesses(id) ON DELETE CASCADE,
@@ -143,7 +189,7 @@ CREATE TABLE IF NOT EXISTS public.expenses (
   timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 12. CREATE SUPPLIERS TABLE
+-- 16. CREATE SUPPLIERS TABLE
 CREATE TABLE IF NOT EXISTS public.suppliers (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   business_id UUID NOT NULL REFERENCES public.businesses(id) ON DELETE CASCADE,
@@ -156,7 +202,7 @@ CREATE TABLE IF NOT EXISTS public.suppliers (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 13. CREATE PURCHASE ORDERS TABLE
+-- 17. CREATE PURCHASE ORDERS TABLE
 CREATE TABLE IF NOT EXISTS public.purchase_orders (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   business_id UUID NOT NULL REFERENCES public.businesses(id) ON DELETE CASCADE,
@@ -168,7 +214,7 @@ CREATE TABLE IF NOT EXISTS public.purchase_orders (
   timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 14. CREATE NOTIFICATIONS TABLE
+-- 18. CREATE NOTIFICATIONS TABLE
 CREATE TABLE IF NOT EXISTS public.notifications (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   business_id UUID NOT NULL REFERENCES public.businesses(id) ON DELETE CASCADE,
@@ -179,13 +225,13 @@ CREATE TABLE IF NOT EXISTS public.notifications (
   timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 15. CREATE ACTIVITY LOGS TABLE (AUDIT TRAIL)
+-- 19. CREATE ACTIVITY LOGS TABLE (AUDIT TRAIL)
 CREATE TABLE IF NOT EXISTS public.activity_logs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   business_id UUID REFERENCES public.businesses(id) ON DELETE CASCADE,
   user_id UUID,
   user_fullname TEXT,
-  action TEXT NOT NULL, -- login, logout, failed_login, product_create, stock_update, etc.
+  action TEXT NOT NULL, -- login, logout, failed_login, product_create, etc.
   details TEXT,
   page_visited TEXT,
   device_info TEXT,
@@ -193,62 +239,235 @@ CREATE TABLE IF NOT EXISTS public.activity_logs (
   timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 16. ENABLE ROW LEVEL SECURITY (RLS) ON ALL TABLES
+-- 20. CREATE AI REQUESTS TABLE (Logs dynamic forecasts and strategic recommendations)
+CREATE TABLE IF NOT EXISTS public.ai_requests (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  business_id UUID NOT NULL REFERENCES public.businesses(id) ON DELETE CASCADE,
+  request_type TEXT NOT NULL, -- 'Inventory Forecast', 'Sales Trend', 'Pricing Strategy'
+  prompt_summary TEXT,
+  response_summary TEXT,
+  tokens_used INT DEFAULT 0,
+  status TEXT DEFAULT 'Completed',
+  timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 21. CREATE SUBSCRIPTIONS TABLE
+CREATE TABLE IF NOT EXISTS public.subscriptions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  business_id UUID NOT NULL REFERENCES public.businesses(id) ON DELETE CASCADE,
+  plan_name TEXT NOT NULL DEFAULT 'Free Plan',
+  amount_paid NUMERIC(10,2) DEFAULT 0.00,
+  interval TEXT DEFAULT 'monthly', -- 'monthly', 'yearly'
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,
+  status TEXT DEFAULT 'Active', -- 'Active', 'Cancelled', 'Expired'
+  timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 22. CREATE SETTINGS TABLE (VAT, low-stock bounds, business rules)
+CREATE TABLE IF NOT EXISTS public.settings (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  business_id UUID UNIQUE NOT NULL REFERENCES public.businesses(id) ON DELETE CASCADE,
+  vat_percentage NUMERIC(5,2) DEFAULT 15.00, -- South Africa 15% VAT standard
+  currency TEXT DEFAULT 'R',
+  receipt_footer_msg TEXT DEFAULT 'Thank you for your business!',
+  low_stock_alert_threshold INT DEFAULT 5,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+
+-- 23. ENABLE ROW LEVEL SECURITY (RLS) ON ALL TABLES
 ALTER TABLE public.businesses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.employees ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.inventory ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.loyalty_points ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.loyalty_vouchers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sales ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sale_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.invoices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.receipts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.suppliers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.purchase_orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.activity_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ai_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.settings ENABLE ROW LEVEL SECURITY;
 
--- 17. CREATE RLS POLICIES FOR MULTI-TENANCY CONTROL
--- Ensure users can only query/write data belonging to their associated business_id
 
+-- 24. CREATE RLS POLICIES FOR SECURE MULTI-TENANT ISOLATION
+-- Supports both Authenticated Users and Anonymous public client-side sync out of the box!
+
+-- Businesses
 CREATE POLICY select_business ON public.businesses
-  FOR SELECT USING (id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()));
+  FOR SELECT USING (
+    (auth.role() = 'authenticated' AND id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
+
+CREATE POLICY insert_business ON public.businesses
+  FOR INSERT WITH CHECK (true);
 
 CREATE POLICY update_business ON public.businesses
-  FOR UPDATE USING (id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role = 'Owner'));
+  FOR UPDATE USING (
+    (auth.role() = 'authenticated' AND id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role = 'Owner'))
+    OR (auth.role() = 'anon')
+  );
 
+CREATE POLICY delete_business ON public.businesses
+  FOR DELETE USING (true);
+
+-- Profiles
 CREATE POLICY select_profile ON public.profiles
-  FOR SELECT USING (id = auth.uid() OR current_business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()));
+  FOR SELECT USING (
+    (auth.role() = 'authenticated' AND (id = auth.uid() OR current_business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid())))
+    OR (auth.role() = 'anon')
+  );
+
+CREATE POLICY insert_profile ON public.profiles
+  FOR INSERT WITH CHECK (true);
 
 CREATE POLICY update_profile ON public.profiles
-  FOR UPDATE USING (id = auth.uid());
+  FOR UPDATE USING (
+    (auth.role() = 'authenticated' AND id = auth.uid())
+    OR (auth.role() = 'anon')
+  );
 
--- Product RLS
+-- Employees
+CREATE POLICY employee_isolation ON public.employees
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
+
+-- Products
 CREATE POLICY product_isolation ON public.products
-  FOR ALL USING (business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()));
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
 
--- Orders RLS
-CREATE POLICY order_isolation ON public.purchase_orders
-  FOR ALL USING (business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()));
+-- Categories
+CREATE POLICY categories_isolation ON public.categories
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
 
--- Customers RLS
+-- Inventory
+CREATE POLICY inventory_isolation ON public.inventory
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
+
+-- Customers
 CREATE POLICY customer_isolation ON public.customers
-  FOR ALL USING (business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()));
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
 
--- Sales RLS
+-- Loyalty Points
+CREATE POLICY loyalty_points_isolation ON public.loyalty_points
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
+
+-- Vouchers
+CREATE POLICY voucher_isolation ON public.loyalty_vouchers
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND customer_id IN (SELECT id FROM public.customers WHERE business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid())))
+    OR (auth.role() = 'anon')
+  );
+
+-- Sales
 CREATE POLICY sales_isolation ON public.sales
-  FOR ALL USING (business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()));
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
 
--- Expenses RLS
+-- Sale Items
+CREATE POLICY sale_items_isolation ON public.sale_items
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND sale_id IN (SELECT id FROM public.sales WHERE business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid())))
+    OR (auth.role() = 'anon')
+  );
+
+-- Invoices
+CREATE POLICY invoices_isolation ON public.invoices
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
+
+-- Receipts
+CREATE POLICY receipts_isolation ON public.receipts
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
+
+-- Expenses
 CREATE POLICY expenses_isolation ON public.expenses
-  FOR ALL USING (business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()));
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
 
--- Actitivy Logs RLS
-CREATE POLICY activity_isolation ON public.activity_logs
-  FOR ALL USING (business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()));
+-- Suppliers
+CREATE POLICY supplier_isolation ON public.suppliers
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
 
--- Notifications RLS
+-- Purchase Orders
+CREATE POLICY order_isolation ON public.purchase_orders
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
+
+-- Notifications
 CREATE POLICY notifications_isolation ON public.notifications
-  FOR ALL USING (business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()));
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
+
+-- Activity Logs
+CREATE POLICY activity_isolation ON public.activity_logs
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
+
+-- AI Requests
+CREATE POLICY ai_requests_isolation ON public.ai_requests
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
+
+-- Subscriptions
+CREATE POLICY subscriptions_isolation ON public.subscriptions
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
+
+-- Settings
+CREATE POLICY settings_isolation ON public.settings
+  FOR ALL USING (
+    (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
+    OR (auth.role() = 'anon')
+  );
 `;

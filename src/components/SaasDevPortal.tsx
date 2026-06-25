@@ -14,9 +14,18 @@ interface SaasDevPortalProps {
     fullname: string;
     role: string;
   } | null;
+  usingSupabaseLive?: boolean;
+  supabaseSchemaOk?: boolean;
+  supabaseErrorMsg?: string | null;
 }
 
-export default function SaasDevPortal({ currentBusiness, currentUser }: SaasDevPortalProps) {
+export default function SaasDevPortal({ 
+  currentBusiness, 
+  currentUser,
+  usingSupabaseLive = false,
+  supabaseSchemaOk = true,
+  supabaseErrorMsg = null
+}: SaasDevPortalProps) {
   const [copied, setCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<'schema' | 'architecture' | 'parameters'>('schema');
 
@@ -34,26 +43,63 @@ export default function SaasDevPortal({ currentBusiness, currentUser }: SaasDevP
           <span className="text-[10px] font-extrabold uppercase font-mono px-2 py-0.5 bg-indigo-500/10 text-indigo-400 rounded-md border border-indigo-500/20">
             SaaS Infrastructure Control
           </span>
-          <h2 className="text-xl font-bold tracking-tight text-white mt-1.5">Supabase Multi-Tenant Integration</h2>
-          <p className="text-xs text-gray-400 mt-1">
+          <h2 className="text-xl font-bold tracking-tight text-white mt-1.5 font-sans">Supabase Multi-Tenant Integration</h2>
+          <p className="text-xs text-gray-400 mt-1 leading-relaxed">
             SpazaFlow AI supports high-scale tenant isolation using Postgres Row Level Security (RLS) policies.
           </p>
         </div>
 
-        <div className="flex gap-2">
-          {hasSupabaseConfig ? (
-            <div className="flex items-center gap-1.5 bg-emerald-550/10 text-emerald-400 border border-emerald-500/20 px-3 py-1.5 rounded-xl text-xs font-bold">
-              <ShieldCheck className="w-4 h-4 text-emerald-500" />
-              <span>Supabase Connected</span>
+        <div className="flex flex-wrap gap-2">
+          {usingSupabaseLive ? (
+            <div className="flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1.5 rounded-xl text-xs font-bold font-mono">
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              <span>LIVE: SYNCED</span>
+            </div>
+          ) : hasSupabaseConfig ? (
+            <div className="flex items-center gap-1.5 bg-amber-550/10 text-amber-400 border border-amber-500/20 px-3 py-1.5 rounded-xl text-xs font-bold font-mono animate-pulse">
+              <AlertCircle className="w-4 h-4 text-amber-400" />
+              <span>CONNECTED: NO SCHEMA</span>
             </div>
           ) : (
-            <div className="flex items-center gap-1.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 px-3 py-1.5 rounded-xl text-xs font-bold">
-              <AlertCircle className="w-4 h-4 text-amber-500" />
-              <span>Running Local Sandbox</span>
+            <div className="flex items-center gap-1.5 bg-zinc-500/10 text-zinc-400 border border-zinc-500/20 px-3 py-1.5 rounded-xl text-xs font-bold font-mono">
+              <Terminal className="w-4 h-4 text-zinc-400" />
+              <span>SANDBOX PLAYGROUND</span>
             </div>
           )}
         </div>
       </div>
+
+      {/* Supabase Status Detail Callouts */}
+      {hasSupabaseConfig && !usingSupabaseLive && !supabaseSchemaOk && (
+        <div className="bg-amber-500/5 border border-amber-500/15 p-5 rounded-2xl space-y-3">
+          <div className="flex items-start gap-3">
+            <div className="p-2 bg-amber-500/10 rounded-xl text-amber-400 mt-0.5">
+              <AlertCircle className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-amber-400 font-sans">Tables Missing in Connected Supabase Database</h3>
+              <p className="text-xs text-gray-400 mt-1 leading-relaxed">
+                We successfully reached your live Supabase project! However, the database tables do not exist yet. To activate production syncing:
+              </p>
+              <ol className="text-[11px] text-gray-400 list-decimal list-inside mt-2 space-y-1 pl-1">
+                <li>Click the <strong className="text-indigo-400">"Copy SQL Schema"</strong> button in the tab below.</li>
+                <li>Go to your <a href="https://supabase.com" target="_blank" rel="noreferrer" className="text-amber-400 underline hover:text-amber-300">Supabase SQL Editor</a>.</li>
+                <li>Paste the script and click <strong className="text-white">Run</strong>.</li>
+                <li>Refresh or switch tabs next to re-establish real-time live database synchronization!</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {usingSupabaseLive && (
+        <div className="bg-emerald-500/5 border border-emerald-500/10 p-4 rounded-xl flex items-center gap-2.5">
+          <div className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
+          <span className="text-[11px] font-mono text-emerald-400 font-bold uppercase tracking-wider">
+            All transactional writes, catalog edits, and security logs are persisting to Supabase in real-time.
+          </span>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         {/* Navigation Sidebar */}

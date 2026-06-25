@@ -26,7 +26,7 @@ import {
   AuditLog, BusinessHealth 
 } from './types';
 
-import { hasSupabaseConfig } from './lib/supabase';
+import { supabase, hasSupabaseConfig } from './lib/supabase';
 
 type TabType = 'dashboard' | 'pos' | 'inventory' | 'suppliers' | 'loyalty' | 'expenses' | 'documents' | 'community' | 'employees' | 'ai' | 'subscription' | 'saas_config';
 
@@ -109,6 +109,12 @@ export default function App() {
   const [community, setCommunity] = useState<CommunityMarketplaceItem[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [health, setHealth] = useState<BusinessHealth | null>(null);
+
+  // Supabase live connection and schema validation states
+  const [usingSupabaseLive, setUsingSupabaseLive] = useState(false);
+  const [supabaseSchemaOk, setSupabaseSchemaOk] = useState(true);
+  const [supabaseErrorMsg, setSupabaseErrorMsg] = useState<string | null>(null);
+  const [activeSupabaseBizId, setActiveSupabaseBizId] = useState<string | null>(null);
 
   // Active Loading state
   const [loading, setLoading] = useState(true);
@@ -200,51 +206,271 @@ export default function App() {
         fetch(endpointMap.health).then(r => r.json()),
       ]);
 
-      // Check if we have customized local storage databases for multi-tenant isolation
-      const localSaaSKey = `spazaflow_saas_multi_${activeBusinessId}`;
-      const savedTenantData = localStorage.getItem(localSaaSKey);
+      let loadedLiveFromSupabase = false;
 
-      if (savedTenantData) {
-        const parsed = JSON.parse(savedTenantData);
-        setProducts(parsed.products || []);
-        setSales(parsed.sales || []);
-        setExpenses(parsed.expenses || []);
-        setSupplierOrders(parsed.supplierOrders || []);
-        setLoyalty(parsed.loyalty || []);
-        setEmployees(parsed.employees || []);
-        setAuditLogs(parsed.auditLogs || []);
-        setHealth(parsed.health || healthRes);
-      } else {
-        // Fallback or seed tenant data separately based on location setting
-        const suffix = ` (${activeBusiness.name})`;
-        const customizedProducts = prodsRes.map((p: any, idx: number) => ({
-          ...p,
-          // vary prices slightly so metrics feel isolated
-          sellingPrice: p.sellingPrice + (idx % 3 === 0 ? 3.50 : -2.00),
-          stock: activeBusinessId === 'b_mplain' ? Math.max(0, p.stock - 8) : p.stock
-        }));
+      if (hasSupabaseConfig && supabase) {
+        try {
+          // Perform a quick verification probe
+          const { data: testProds, error: testError } = await supabase.from('products').select('id').limit(1);
+          
+          if (testError) {
+            console.warn("Supabase check err:", testError);
+            if (testError.message && (testError.message.includes('relation') && testError.message.includes('does not exist')) || testError.code === '42P01') {
+              setSupabaseSchemaOk(false);
+              setUsingSupabaseLive(false);
+              setSupabaseErrorMsg("Connected! However, our SQL tables schema has not yet been executed in your Supabase project. Navigate to 'Database & SQL Integration' to copy the schema script.");
+            } else {
+              setUsingSupabaseLive(false);
+              setSupabaseErrorMsg(testError.message || "Failed to communicate with connected Supabase instance.");
+            }
+          } else {
+            setSupabaseSchemaOk(true);
+            setUsingSupabaseLive(true);
+            setSupabaseErrorMsg(null);
 
-        setProducts(customizedProducts);
-        setSales(salesRes);
-        setExpenses(expRes);
-        setSupplierOrders(ordRes);
-        setLoyalty(loyRes);
-        setEmployees(empsRes);
-        setAuditLogs(auditRes);
-        setHealth(healthRes);
+            // Fetch or insert the business tenant in the live DB
+            const { data: activeDBBizs } = await supabase.from('businesses').select('*').eq('slug', activeBusiness.slug);
+            let targetBizUUID = null;
 
-        // Keep catalog state stored
-        const initialSaaSPack = {
-          products: customizedProducts,
-          sales: salesRes,
-          expenses: expRes,
-          supplierOrders: ordRes,
-          loyalty: loyRes,
-          employees: empsRes,
-          auditLogs: auditRes,
-          health: healthRes
-        };
-        localStorage.setItem(localSaaSKey, JSON.stringify(initialSaaSPack));
+            if (activeDBBizs && activeDBBizs.length > 0) {
+              targetBizUUID = activeDBBizs[0].id;
+            } else {
+              // Register this business automatically in live database
+              const { data: insertedBiz, error: insertBizError } = await supabase.from('businesses').insert({
+                name: activeBusiness.name,
+                slug: activeBusiness.slug,
+                owner_id: '00000000-0000-0000-0000-000000000000', // System anon default owner
+                plan_tier: activeBusiness.plan_tier,
+                subscription_status: activeBusiness.subscription_status
+              }).select();
+
+              if (insertedBiz && insertedBiz.length > 0) {
+                targetBizUUID = insertedBiz[0].id;
+              }
+            }
+
+            if (targetBizUUID) {
+              setActiveSupabaseBizId(targetBizUUID);
+
+              // Pull tenant metrics
+              const [
+                { data: dbProds },
+                { data: dbSales },
+                { data: dbExps },
+                { data: dbLoyalty },
+                { data: dbOrders },
+                { data: dbEmps },
+                { data: dbLogs }
+              ] = await Promise.all([
+                supabase.from('products').select('*').eq('business_id', targetBizUUID),
+                supabase.from('sales').select('*').eq('business_id', targetBizUUID).order('timestamp', { ascending: false }),
+                supabase.from('expenses').select('*').eq('business_id', targetBizUUID).order('timestamp', { ascending: false }),
+                supabase.from('customers').select('*').eq('business_id', targetBizUUID),
+                supabase.from('purchase_orders').select('*').eq('business_id', targetBizUUID).order('timestamp', { ascending: false }),
+                supabase.from('employees').select('*').eq('business_id', targetBizUUID),
+                supabase.from('activity_logs').select('*').eq('business_id', targetBizUUID).order('timestamp', { ascending: false })
+              ]);
+
+              // Seed / map products
+              if (dbProds && dbProds.length > 0) {
+                setProducts(dbProds.map(p => ({
+                  id: p.id,
+                  name: p.name,
+                  barcode: p.barcode || '',
+                  category: p.category_name || 'General',
+                  costPrice: Number(p.cost_price || 0),
+                  sellingPrice: Number(p.selling_price || 0),
+                  stock: Number(p.stock ?? 0),
+                  minStock: Number(p.min_stock ?? 5),
+                  expiryDate: p.expiry_date || undefined,
+                  fastSelling: p.fast_selling,
+                  slowMoving: p.slow_moving,
+                  imageUrl: p.image_url || undefined
+                })));
+              } else {
+                // Seed baseline catalog to give a highly qualitative start state
+                const customSeed = prodsRes.map((p: any) => ({
+                  business_id: targetBizUUID,
+                  name: p.name,
+                  barcode: p.barcode,
+                  category_name: p.category,
+                  cost_price: p.costPrice,
+                  selling_price: p.sellingPrice,
+                  stock: p.stock,
+                  min_stock: p.minStock,
+                  expiry_date: p.expiryDate,
+                  fast_selling: p.fastSelling,
+                  slow_moving: p.slowMoving
+                }));
+                await supabase.from('products').insert(customSeed);
+                // Pull after insert
+                const { data: dbProdsRetry } = await supabase.from('products').select('*').eq('business_id', targetBizUUID);
+                if (dbProdsRetry) {
+                  setProducts(dbProdsRetry.map(p => ({
+                    id: p.id,
+                    name: p.name,
+                    barcode: p.barcode || '',
+                    category: p.category_name || 'General',
+                    costPrice: Number(p.cost_price || 0),
+                    sellingPrice: Number(p.selling_price || 0),
+                    stock: Number(p.stock ?? 0),
+                    minStock: Number(p.min_stock ?? 5),
+                    expiryDate: p.expiry_date || undefined,
+                    fastSelling: p.fast_selling,
+                    slowMoving: p.slow_moving,
+                    imageUrl: p.image_url || undefined
+                  })));
+                }
+              }
+
+              // Set sales
+              if (dbSales && dbSales.length > 0) {
+                setSales(dbSales.map(s => ({
+                  id: s.id,
+                  items: s.items || [],
+                  subtotal: Number(s.subtotal || 0),
+                  vat: Number(s.vat || 0),
+                  total: Number(s.total || 0),
+                  paymentMethod: s.payment_method || 'Cash',
+                  paidAmount: Number(s.paid_amount || 0),
+                  changeAmount: Number(s.change_amount || 0),
+                  timestamp: s.timestamp,
+                  customerPhone: s.customer_phone || '',
+                  pointsEarned: Number(s.points_earned || 0),
+                  cashierName: s.cashier_name || 'Thabo Shabalala'
+                })));
+              } else {
+                setSales([]);
+              }
+
+              // Set expenses
+              if (dbExps && dbExps.length > 0) {
+                setExpenses(dbExps.map(e => ({
+                  id: e.id,
+                  category: e.category,
+                  amount: Number(e.amount),
+                  description: e.description || '',
+                  timestamp: e.timestamp
+                })));
+              } else {
+                setExpenses([]);
+              }
+
+              // Set customers
+              if (dbLoyalty && dbLoyalty.length > 0) {
+                setLoyalty(dbLoyalty.map(c => ({
+                  id: c.id,
+                  name: c.name,
+                  phone: c.phone,
+                  points: Number(c.points || 0),
+                  cardCode: c.card_code || 'SF-' + Math.floor(1000 + Math.random() * 9000),
+                  purchaseHistoryCount: 0,
+                  referrals: Number(c.referrals || 0),
+                  vouchers: []
+                })));
+              } else {
+                setLoyalty([]);
+              }
+
+              // Set purchase orders
+              if (dbOrders && dbOrders.length > 0) {
+                setSupplierOrders(dbOrders.map(o => ({
+                  id: o.id,
+                  supplierId: o.supplier_id || '',
+                  supplierName: o.supplier_name,
+                  items: o.items || [],
+                  total: Number(o.total || 0),
+                  status: o.status || 'Pending',
+                  timestamp: o.timestamp
+                })));
+              } else {
+                setSupplierOrders([]);
+              }
+
+              // Set employees
+              if (dbEmps && dbEmps.length > 0) {
+                setEmployees(dbEmps.map(e => ({
+                  id: e.id,
+                  name: e.name,
+                  role: e.role || 'Cashier',
+                  pin: e.pin || '1234',
+                  status: e.status || 'Active',
+                  attendance: []
+                })));
+              } else {
+                setEmployees([]);
+              }
+
+              // Set audit logs
+              if (dbLogs && dbLogs.length > 0) {
+                setAuditLogs(dbLogs.map(l => ({
+                  id: l.id,
+                  timestamp: l.timestamp,
+                  user: l.user_fullname || 'Unknown Staff',
+                  role: 'Manager',
+                  action: l.action,
+                  details: l.details || ''
+                })));
+              } else {
+                setAuditLogs([]);
+              }
+
+              loadedLiveFromSupabase = true;
+            }
+          }
+        } catch (dbError) {
+          console.error("Failed querying Supabase live tables: ", dbError);
+          setUsingSupabaseLive(false);
+        }
+      }
+
+      if (!loadedLiveFromSupabase) {
+        // Check if we have customized local storage databases for multi-tenant isolation
+        const localSaaSKey = `spazaflow_saas_multi_${activeBusinessId}`;
+        const savedTenantData = localStorage.getItem(localSaaSKey);
+
+        if (savedTenantData) {
+          const parsed = JSON.parse(savedTenantData);
+          setProducts(parsed.products || []);
+          setSales(parsed.sales || []);
+          setExpenses(parsed.expenses || []);
+          setSupplierOrders(parsed.supplierOrders || []);
+          setLoyalty(parsed.loyalty || []);
+          setEmployees(parsed.employees || []);
+          setAuditLogs(parsed.auditLogs || []);
+          setHealth(parsed.health || healthRes);
+        } else {
+          // Fallback or seed tenant data separately based on location setting
+          const suffix = ` (${activeBusiness.name})`;
+          const customizedProducts = prodsRes.map((p: any, idx: number) => ({
+            ...p,
+            // vary prices slightly so metrics feel isolated
+            sellingPrice: p.sellingPrice + (idx % 3 === 0 ? 3.50 : -2.00),
+            stock: activeBusinessId === 'b_mplain' ? Math.max(0, p.stock - 8) : p.stock
+          }));
+
+          setProducts(customizedProducts);
+          setSales(salesRes);
+          setExpenses(expRes);
+          setSupplierOrders(ordRes);
+          setLoyalty(loyRes);
+          setEmployees(empsRes);
+          setAuditLogs(auditRes);
+          setHealth(healthRes);
+
+          // Keep catalog state stored
+          const initialSaaSPack = {
+            products: customizedProducts,
+            sales: salesRes,
+            expenses: expRes,
+            supplierOrders: ordRes,
+            loyalty: loyRes,
+            employees: empsRes,
+            auditLogs: auditRes,
+            health: healthRes
+          };
+          localStorage.setItem(localSaaSKey, JSON.stringify(initialSaaSPack));
+        }
       }
 
       setSuppliers(supsRes);
@@ -284,10 +510,54 @@ export default function App() {
   const handleSaveProduct = async (payload: Partial<Product>) => {
     const isNew = !payload.id;
     let computedProds: Product[] = [];
+    let savedId = payload.id;
+
+    if (usingSupabaseLive && supabase && activeSupabaseBizId) {
+      try {
+        const dbPayload = {
+          business_id: activeSupabaseBizId,
+          name: payload.name || 'Unnamed product',
+          barcode: payload.barcode || 'b_' + Date.now(),
+          category_name: payload.category || 'General',
+          cost_price: Number(payload.costPrice || 0),
+          selling_price: Number(payload.sellingPrice || 0),
+          stock: Number(payload.stock ?? 0),
+          min_stock: Number(payload.minStock ?? 5),
+          expiry_date: payload.expiryDate || null,
+          fast_selling: payload.fastSelling || false,
+          slow_moving: payload.slowMoving || false
+        };
+
+        if (isNew || (payload.id && payload.id.startsWith('p_'))) {
+          // Insert new
+          const { data, error } = await supabase.from('products').insert(dbPayload).select();
+          if (error) throw error;
+          if (data && data[0]) {
+            savedId = data[0].id;
+          }
+        } else {
+          // Update existing
+          const { error } = await supabase.from('products').update(dbPayload).eq('id', payload.id);
+          if (error) throw error;
+        }
+
+        // Live audit log
+        await supabase.from('activity_logs').insert({
+          business_id: activeSupabaseBizId,
+          action: isNew ? 'Product Creation' : 'Product Updated',
+          details: `Live DB sync: ${payload.name || 'Item'}`,
+          user_fullname: session.fullname,
+          page_visited: '/' + activeTab
+        });
+
+      } catch (err: any) {
+        console.error("Supabase live product save failed, falling back to local:", err);
+      }
+    }
 
     if (isNew) {
       const newProd: Product = {
-        id: 'p_' + Date.now(),
+        id: savedId || 'p_' + Date.now(),
         name: payload.name || 'Unnamed product',
         barcode: payload.barcode || 'b_' + Date.now(),
         category: payload.category || 'General',
@@ -313,6 +583,24 @@ export default function App() {
 
   const handleDeleteProduct = async (id: string) => {
     const targetProd = products.find(p => p.id === id);
+
+    if (usingSupabaseLive && supabase && activeSupabaseBizId && id && !id.startsWith('p_')) {
+      try {
+        const { error } = await supabase.from('products').delete().eq('id', id);
+        if (error) throw error;
+
+        await supabase.from('activity_logs').insert({
+          business_id: activeSupabaseBizId,
+          action: 'Product Deleted',
+          details: `Item: ${targetProd?.name || id}`,
+          user_fullname: session.fullname,
+          page_visited: '/' + activeTab
+        });
+      } catch (err: any) {
+        console.error("Supabase product deletion error:", err);
+      }
+    }
+
     const updated = products.filter(p => p.id !== id);
     setProducts(updated);
     persistTenantData({ products: updated });
@@ -351,15 +639,83 @@ export default function App() {
     if (customerPhone) {
       updatedLoyalty = loyalty.map(l => {
         if (l.phone === customerPhone) {
-          return { ...l, points: l.points + pointsEarned, purchaseHistoryCount: l.purchaseHistoryCount + 1 };
+          const pointsToAdd = pointsEarned;
+          
+          if (usingSupabaseLive && supabase && activeSupabaseBizId && l.id && !l.id.startsWith('l_')) {
+            supabase.from('customers')
+              .update({ points: (l.points || 0) + pointsToAdd })
+              .eq('id', l.id)
+              .then(({ error }) => {
+                if (error) console.error("Error updating points in Supabase:", error);
+              });
+          }
+
+          return { ...l, points: l.points + pointsToAdd, purchaseHistoryCount: l.purchaseHistoryCount + 1 };
         }
         return l;
       });
       setLoyalty(updatedLoyalty);
     }
 
+    let liveSaleId = 's_' + Date.now();
+
+    if (usingSupabaseLive && supabase && activeSupabaseBizId) {
+      try {
+        const { data: dbSale, error: saleErr } = await supabase.from('sales').insert({
+          business_id: activeSupabaseBizId,
+          subtotal: roundedSub,
+          vat,
+          total: subtotal,
+          payment_method: paymentMethod,
+          paid_amount: paymentMethod === 'Cash' ? paidAmount : subtotal,
+          change_amount: change,
+          customer_phone: customerPhone || null,
+          points_earned: pointsEarned,
+          cashier_name: session.fullname
+        }).select();
+
+        if (saleErr) throw saleErr;
+        if (dbSale && dbSale[0]) {
+          liveSaleId = dbSale[0].id;
+          
+          // Insert sale items
+          const dbItems = processedItems.map((ci: any) => ({
+            sale_id: liveSaleId,
+            product_id: ci.productId && !ci.productId.startsWith('p_') ? ci.productId : null,
+            product_name: ci.productName,
+            price: ci.price,
+            quantity: ci.quantity,
+            total: ci.total
+          }));
+          await supabase.from('sale_items').insert(dbItems);
+
+          // Update stock counts in live database
+          for (const ci of processedItems) {
+            if (ci.productId && !ci.productId.startsWith('p_')) {
+              const matchedProd = products.find(p => p.id === ci.productId);
+              if (matchedProd) {
+                const finalStock = Math.max(0, matchedProd.stock - ci.quantity);
+                await supabase.from('products').update({ stock: finalStock }).eq('id', ci.productId);
+              }
+            }
+          }
+
+          // Live activity log
+          await supabase.from('activity_logs').insert({
+            business_id: activeSupabaseBizId,
+            action: 'Sales Completed',
+            details: `R${subtotal.toFixed(2)} invoiced checkout`,
+            user_fullname: session.fullname,
+            page_visited: '/' + activeTab
+          });
+        }
+      } catch (err: any) {
+        console.error("Supabase checkout sync failed, falling back to local storage:", err);
+      }
+    }
+
     const newSale: Sale = {
-      id: 's_' + Date.now(),
+      id: liveSaleId,
       items: processedItems,
       subtotal: roundedSub,
       vat,
@@ -402,8 +758,36 @@ export default function App() {
   };
 
   const handleAddExpense = async (payload: Partial<Expense>) => {
+    let savedId = 'e_' + Date.now();
+
+    if (usingSupabaseLive && supabase && activeSupabaseBizId) {
+      try {
+        const { data, error } = await supabase.from('expenses').insert({
+          business_id: activeSupabaseBizId,
+          category: payload.category || 'Other',
+          amount: Number(payload.amount || 0),
+          description: payload.description || 'General logistics'
+        }).select();
+
+        if (error) throw error;
+        if (data && data[0]) {
+          savedId = data[0].id;
+        }
+
+        await supabase.from('activity_logs').insert({
+          business_id: activeSupabaseBizId,
+          action: 'Expense Added',
+          details: `Logged operations outgoing R${Number(payload.amount).toFixed(2)} category: ${payload.category}`,
+          user_fullname: session.fullname,
+          page_visited: '/' + activeTab
+        });
+      } catch (err) {
+        console.error("Supabase expense insert failed:", err);
+      }
+    }
+
     const newExp: Expense = {
-      id: 'e_' + Date.now(),
+      id: savedId,
       category: payload.category as any || 'Other',
       amount: Number(payload.amount || 0),
       description: payload.description || 'General logistics',
@@ -497,12 +881,43 @@ export default function App() {
   };
 
   const handleAddLoyalty = async (payload: Partial<CustomerLoyalty>) => {
+    let savedId = 'l_' + Date.now();
+    const computedCode = 'SF-' + Math.floor(1000 + Math.random() * 9000);
+
+    if (usingSupabaseLive && supabase && activeSupabaseBizId) {
+      try {
+        const { data, error } = await supabase.from('customers').insert({
+          business_id: activeSupabaseBizId,
+          name: payload.name || 'Anonymous Loyalty Club',
+          phone: payload.phone || '',
+          points: 10,
+          card_code: computedCode,
+          referrals: Number(payload.referrals || 0)
+        }).select();
+
+        if (error) throw error;
+        if (data && data[0]) {
+          savedId = data[0].id;
+        }
+
+        await supabase.from('activity_logs').insert({
+          business_id: activeSupabaseBizId,
+          action: 'Customer Loyalty Registered',
+          details: `Registered customer: ${payload.name || 'Anonymous'}`,
+          user_fullname: session.fullname,
+          page_visited: '/' + activeTab
+        });
+      } catch (err) {
+        console.error("Supabase customer loyalty insert failed:", err);
+      }
+    }
+
     const newL: CustomerLoyalty = {
-      id: 'l_' + Date.now(),
+      id: savedId,
       name: payload.name || 'Anonymous Loyalty Club',
       phone: payload.phone || '',
       points: 10,
-      cardCode: 'SF-' + Math.floor(1000 + Math.random() * 9000),
+      cardCode: computedCode,
       vouchers: [
         { id: 'v_' + Date.now(), code: 'WELCOMESAAS', description: 'R15 Welcome Bonus Voucher', discountValue: 15.00, minSpend: 50.00, expiryDate: '2026-12-31', isUsed: false }
       ],
@@ -1144,7 +1559,11 @@ export default function App() {
               {activeTab === 'pos' && (
                 <PosSystem 
                   products={products} 
-                  onSaleComplete={handleCheckoutSale} 
+                  onSaleComplete={async (completedSale: Sale) => {
+                    // Update layout metrics and fetch latest states
+                    setSales(prev => [completedSale, ...prev]);
+                    await fetchTenantDataset();
+                  }} 
                   loyalty={loyalty} 
                   currency="R" 
                 />
@@ -1229,6 +1648,9 @@ export default function App() {
                 <SaasDevPortal 
                   currentBusiness={activeBusiness} 
                   currentUser={session} 
+                  usingSupabaseLive={usingSupabaseLive}
+                  supabaseSchemaOk={supabaseSchemaOk}
+                  supabaseErrorMsg={supabaseErrorMsg}
                 />
               )}
 
