@@ -695,48 +695,58 @@ app.get("/api/audit", (req, res) => {
 
 // Dynamic Business health calculator
 app.get("/api/health-score", (req, res) => {
-  const todayStr = new Date().toISOString().split('T')[0];
-  const todaySales = db.sales.filter(s => s.timestamp.startsWith(todayStr));
-  const revenueToday = todaySales.reduce((acc, s) => acc + s.total, 0);
+  try {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const salesArr = db.sales || [];
+    const productsArr = db.products || [];
 
-  const lowStockCount = db.products.filter(p => p.stock <= p.minStock).length;
-  
-  // Expiring in next 60 days
-  const sixtyDaysTime = Date.now() + (60 * 24 * 3600000);
-  const expiringSoonCount = db.products.filter(p => p.expiryDate && new Date(p.expiryDate).getTime() < sixtyDaysTime).length;
+    const todaySales = salesArr.filter(s => s && s.timestamp && typeof s.timestamp === 'string' && s.timestamp.startsWith(todayStr));
+    const revenueToday = todaySales.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
 
-  let totalCost = 0;
-  let totalSellValue = 0;
-  db.products.forEach(p => {
-    totalCost += p.costPrice * p.stock;
-    totalSellValue += p.sellingPrice * p.stock;
-  });
+    const lowStockCount = productsArr.filter(p => p && Number(p.stock || 0) <= Number(p.minStock || 5)).length;
+    
+    // Expiring in next 60 days
+    const sixtyDaysTime = Date.now() + (60 * 24 * 3600000);
+    const expiringSoonCount = productsArr.filter(p => p && p.expiryDate && new Date(p.expiryDate).getTime() < sixtyDaysTime).length;
 
-  const profitMargin = totalSellValue > 0 ? ((totalSellValue - totalCost) / totalSellValue) * 100 : 0;
+    let totalCost = 0;
+    let totalSellValue = 0;
+    productsArr.forEach(p => {
+      if (p) {
+        totalCost += (Number(p.costPrice) || 0) * (Number(p.stock) || 0);
+        totalSellValue += (Number(p.sellingPrice) || 0) * (Number(p.stock) || 0);
+      }
+    });
 
-  // Compute standard township score (0-100)
-  let scoreValue = 85; 
-  if (lowStockCount > 3) scoreValue -= 15;
-  if (expiringSoonCount > 2) scoreValue -= 10;
-  if (profitMargin < 15) scoreValue -= 20;
+    const profitMargin = totalSellValue > 0 ? ((totalSellValue - totalCost) / totalSellValue) * 100 : 0;
 
-  let score: 'Excellent' | 'Good' | 'Warning' | 'Critical' = 'Good';
-  if (scoreValue >= 85) score = 'Excellent';
-  else if (scoreValue >= 65) score = 'Good';
-  else if (scoreValue >= 40) score = 'Warning';
-  else score = 'Critical';
+    // Compute standard township score (0-100)
+    let scoreValue = 85; 
+    if (lowStockCount > 3) scoreValue -= 15;
+    if (expiringSoonCount > 2) scoreValue -= 10;
+    if (profitMargin < 15) scoreValue -= 20;
 
-  const healthPayload: BusinessHealth = {
-    score,
-    scoreValue,
-    lowStockCount,
-    expiringSoonCount,
-    revenueToday: Number(revenueToday.toFixed(2)),
-    transactionsToday: todaySales.length,
-    profitMargin: Number(profitMargin.toFixed(2))
-  };
+    let score: 'Excellent' | 'Good' | 'Warning' | 'Critical' = 'Good';
+    if (scoreValue >= 85) score = 'Excellent';
+    else if (scoreValue >= 65) score = 'Good';
+    else if (scoreValue >= 40) score = 'Warning';
+    else score = 'Critical';
 
-  res.json(healthPayload);
+    const healthPayload: BusinessHealth = {
+      score,
+      scoreValue,
+      lowStockCount,
+      expiringSoonCount,
+      revenueToday: Number(revenueToday.toFixed(2)),
+      transactionsToday: todaySales.length,
+      profitMargin: Number(profitMargin.toFixed(2))
+    };
+
+    res.json(healthPayload);
+  } catch (err) {
+    console.error("Error in health-score calculation:", err);
+    res.status(500).json({ error: "Internal Server Error in health-score" });
+  }
 });
 
 

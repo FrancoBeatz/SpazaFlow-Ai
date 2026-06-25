@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Package, PlusCircle, AlertTriangle, Calendar, Save, Trash2, Tag, ArrowUpRight, Barcode } from 'lucide-react';
+import { Package, PlusCircle, AlertTriangle, Calendar, Save, Trash2, Tag, ArrowUpRight, Barcode, Upload, RefreshCw } from 'lucide-react';
 import { Product } from '../types';
+import { supabase, hasSupabaseConfig } from '../lib/supabase';
 
 interface InventoryCatalogProps {
   products: Product[];
@@ -24,6 +25,11 @@ export default function InventoryCatalog({ products, onSaveProduct, onDeleteProd
   const [minStock, setMinStock] = useState('5');
   const [expiryDate, setExpiryDate] = useState('');
 
+  // Storage / Image Upload states
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [imageUrl, setImageUrl] = useState<string>('');
+  const [dragOver, setDragOver] = useState(false);
+
   const categories = ['All', ...new Set(products.map(p => p.category))];
 
   const filteredProducts = products.filter(p => 
@@ -46,6 +52,7 @@ export default function InventoryCatalog({ products, onSaveProduct, onDeleteProd
       stock: parseInt(stock),
       minStock: parseInt(minStock || '5'),
       expiryDate: expiryDate || undefined,
+      imageUrl: imageUrl || undefined,
       fastSelling: false,
       slowMoving: false
     };
@@ -60,7 +67,66 @@ export default function InventoryCatalog({ products, onSaveProduct, onDeleteProd
     setStock('');
     setMinStock('5');
     setExpiryDate('');
+    setImageUrl('');
     setShowAddForm(false);
+  };
+
+  const uploadFileProcess = async (file: File) => {
+    if (hasSupabaseConfig && supabase) {
+      setUploadingImage(true);
+      try {
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${Date.now()}-${Math.floor(Math.random() * 1000)}.${fileExt}`;
+        const filePath = `product-pics/${fileName}`;
+
+        // Upload file to Supabase storage bucket called 'products'
+        const { error: uploadError } = await supabase.storage
+          .from('products')
+          .upload(filePath, file, {
+            cacheControl: '3600',
+            upsert: false
+          });
+
+        if (uploadError) {
+          throw uploadError;
+        }
+
+        // Retrieve public URL
+        const { data: { publicUrl } } = supabase.storage
+          .from('products')
+          .getPublicUrl(filePath);
+
+        setImageUrl(publicUrl);
+      } catch (err: any) {
+        alert("Upload error: " + (err.message || err));
+      } finally {
+        setUploadingImage(false);
+      }
+    } else {
+      // Offline sandbox local fallback preview
+      setUploadingImage(true);
+      setTimeout(() => {
+        const previewUrl = URL.createObjectURL(file);
+        setImageUrl(previewUrl);
+        setUploadingImage(false);
+      }, 600);
+    }
+  };
+
+  const handleFileDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      await uploadFileProcess(file);
+    }
+  };
+
+  const handleFileSelectChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      await uploadFileProcess(file);
+    }
   };
 
   const handleUpdateStock = async (p: Product, change: number) => {
@@ -210,6 +276,65 @@ export default function InventoryCatalog({ products, onSaveProduct, onDeleteProd
               />
             </div>
 
+            {/* Drag & Drop Product Image Upload Field */}
+            <div className="col-span-full space-y-1.5">
+              <label className="block text-xs font-semibold text-gray-400 uppercase">Product Branding Image</label>
+              <div 
+                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={handleFileDrop}
+                className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all relative ${
+                  dragOver ? 'border-indigo-500 bg-indigo-500/10' : 'border-white/10 bg-[#0A0A0B] hover:border-white/20'
+                }`}
+              >
+                {uploadingImage ? (
+                  <div className="flex flex-col items-center justify-center space-y-2 py-2">
+                    <RefreshCw className="w-6 h-6 text-indigo-400 animate-spin" />
+                    <span className="text-[11px] font-bold text-indigo-400">Uploading media to Supabase storage...</span>
+                  </div>
+                ) : imageUrl ? (
+                  <div className="flex items-center justify-between gap-4 p-2">
+                    <div className="flex items-center gap-3">
+                      <img 
+                        src={imageUrl} 
+                        alt="Product Preview" 
+                        className="w-12 h-12 rounded-lg object-cover border border-white/10"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="text-left">
+                        <span className="text-[11px] font-bold text-white block">Image uploaded successfully</span>
+                        <span className="text-[9px] text-emerald-400 font-mono block overflow-hidden max-w-[200px] text-ellipsis whitespace-nowrap">{imageUrl}</span>
+                      </div>
+                    </div>
+                    <button 
+                      type="button" 
+                      onClick={() => setImageUrl('')}
+                      className="text-[10px] text-rose-400 hover:underline font-bold"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2 cursor-pointer">
+                    <Upload className="w-6 h-6 text-gray-500 mx-auto" />
+                    <div className="text-xs text-gray-400">
+                      <label className="text-indigo-400 font-bold hover:underline cursor-pointer">
+                        <span>Upload a file</span>
+                        <input 
+                          type="file" 
+                          accept="image/*" 
+                          onChange={handleFileSelectChange}
+                          className="hidden" 
+                        />
+                      </label>
+                      <span> or drag and drop your product branding image here</span>
+                    </div>
+                    <p className="text-[9px] text-gray-500">Supports PNG, JPG, GIF up to 5MB</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
             <div className="col-span-full flex justify-end gap-2 pt-2 border-t border-white/5">
               <button
                 type="button"
@@ -280,18 +405,28 @@ export default function InventoryCatalog({ products, onSaveProduct, onDeleteProd
                     
                     {/* Item details */}
                     <td className="p-4 font-sans max-w-xs">
-                      <div>
-                        {editingProduct?.id === p.id ? (
-                          <input
-                            type="text"
-                            value={editingProduct.name || ''}
-                            onChange={(e) => setEditingProduct({ ...editingProduct, name: e.target.value })}
-                            className="p-1 border border-white/10 bg-[#0A0A0B] text-white rounded w-full outline-none text-xs"
+                      <div className="flex items-center gap-3">
+                        {p.imageUrl && (
+                          <img 
+                            src={p.imageUrl} 
+                            alt={p.name} 
+                            className="w-8 h-8 rounded-lg object-cover border border-white/10 shrink-0"
+                            referrerPolicy="no-referrer"
                           />
-                        ) : (
-                          <span className="font-bold text-white text-sm block leading-tight">{p.name}</span>
                         )}
-                        <span className="text-[10px] font-mono text-gray-500 mt-0.5 block">Barcode ID: {p.barcode}</span>
+                        <div className="min-w-0 flex-1">
+                          {editingProduct?.id === p.id ? (
+                            <input
+                              type="text"
+                              value={editingProduct.name || ''}
+                              onChange={(e) => setEditingProduct({ ...editingProduct, name: e.target.value })}
+                              className="p-1 border border-white/10 bg-[#0A0A0B] text-white rounded w-full outline-none text-xs"
+                            />
+                          ) : (
+                            <span className="font-bold text-white text-sm block leading-tight truncate">{p.name}</span>
+                          )}
+                          <span className="text-[10px] font-mono text-gray-500 mt-0.5 block">Barcode ID: {p.barcode}</span>
+                        </div>
                       </div>
                     </td>
 

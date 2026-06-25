@@ -67,11 +67,11 @@ export default function App() {
     role: 'Owner' | 'Manager' | 'Cashier';
     isAuthenticated: boolean;
   }>({
-    fullname: 'Thabo Shabalala',
-    email: 'thabo@spazaflow.co.za',
-    phone: '072 123 4567',
+    fullname: '',
+    email: '',
+    phone: '',
     role: 'Owner',
-    isAuthenticated: true // Loaded by default for high visual convenience
+    isAuthenticated: false
   });
 
   // Tenancy Management State
@@ -170,6 +170,144 @@ export default function App() {
     }
   }, [toastNotif]);
 
+  // Supabase Auth and State Loader mount hook
+  useEffect(() => {
+    if (hasSupabaseConfig && supabase) {
+      // Check current session
+      supabase.auth.getSession().then(({ data: { session: activeSession } }) => {
+        if (activeSession) {
+          const user = activeSession.user;
+          supabase.from('profiles').select('*').eq('id', user.id).single().then(({ data: profile }) => {
+            if (profile) {
+              setSession({
+                fullname: profile.fullname || user.user_metadata?.fullname || 'Owner',
+                email: profile.email || user.email || '',
+                phone: profile.phone || user.user_metadata?.phone || '',
+                role: (profile.role as any) || 'Owner',
+                isAuthenticated: true
+              });
+              if (profile.current_business_id) {
+                supabase.from('businesses').select('*').then(({ data: bizs }) => {
+                  if (bizs && bizs.length > 0) {
+                    setBusinesses(bizs.map(b => ({
+                      id: b.id,
+                      name: b.name,
+                      slug: b.slug,
+                      plan_tier: b.plan_tier || 'Free',
+                      subscription_status: b.subscription_status || 'Active',
+                      location: b.settings?.location || 'South Africa'
+                    })));
+                    const matched = bizs.find(b => b.id === profile.current_business_id);
+                    if (matched) {
+                      setActiveBusinessId(matched.id);
+                    } else {
+                      setActiveBusinessId(bizs[0].id);
+                    }
+                  }
+                });
+              }
+            } else {
+              // Create user profile in live database
+              const newProfile = {
+                id: user.id,
+                fullname: user.user_metadata?.fullname || 'Owner',
+                phone: user.user_metadata?.phone || '',
+                email: user.email || '',
+                role: 'Owner',
+                email_verified: user.email_confirmed_at ? true : false
+              };
+              supabase.from('profiles').insert(newProfile).then(() => {
+                setSession({
+                  fullname: newProfile.fullname,
+                  email: newProfile.email,
+                  phone: newProfile.phone,
+                  role: 'Owner',
+                  isAuthenticated: true
+                });
+              });
+            }
+          });
+        } else {
+          setSession(prev => ({ ...prev, isAuthenticated: false }));
+        }
+      });
+
+      // Listen for runtime Auth changes
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, activeSession) => {
+        if (activeSession) {
+          const user = activeSession.user;
+          const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+          if (profile) {
+            setSession({
+              fullname: profile.fullname || user.user_metadata?.fullname || 'Owner',
+              email: profile.email || user.email || '',
+              phone: profile.phone || user.user_metadata?.phone || '',
+              role: (profile.role as any) || 'Owner',
+              isAuthenticated: true
+            });
+            if (profile.current_business_id) {
+              setActiveBusinessId(profile.current_business_id);
+            }
+          }
+        } else {
+          setSession(prev => ({ ...prev, isAuthenticated: false }));
+        }
+      });
+
+      return () => {
+        subscription.unsubscribe();
+      };
+    } else {
+      // Sandbox fallback mode session loader
+      const savedSession = localStorage.getItem('spazaflow_offline_session');
+      if (savedSession) {
+        setSession(JSON.parse(savedSession));
+      } else {
+        // High fidelity default for user test convenience if sandbox is completely fresh
+        setSession({
+          fullname: 'Thabo Shabalala',
+          email: 'thabo@spazaflow.co.za',
+          phone: '072 123 4567',
+          role: 'Owner',
+          isAuthenticated: true
+        });
+      }
+    }
+  }, []);
+
+  // Supabase Realtime Sync Channel
+  useEffect(() => {
+    if (usingSupabaseLive && supabase && activeSupabaseBizId) {
+      console.log("Subscribing to live Supabase Realtime for business ID:", activeSupabaseBizId);
+      
+      const channel = supabase
+        .channel(`realtime-biz-${activeSupabaseBizId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public'
+          },
+          (payload: any) => {
+            // Check if the modified record belongs to the active business
+            const record = payload.new || payload.old;
+            if (record && record.business_id === activeSupabaseBizId) {
+              console.log("Live DB change received via Supabase Realtime. Refreshing local dataset...", payload);
+              // Clean fetch to synchronize state across all tabs/devices
+              fetchTenantDataset();
+            }
+          }
+        )
+        .subscribe((status) => {
+          console.log(`Supabase Realtime subscription status for ${activeSupabaseBizId}:`, status);
+        });
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    }
+  }, [usingSupabaseLive, activeSupabaseBizId]);
+
   // Load datasets from multi-tenant state storage
   const fetchTenantDataset = async () => {
     setLoading(true);
@@ -189,21 +327,35 @@ export default function App() {
         health: '/api/health-score'
       };
 
+      const fetchJsonOrDefault = async (url: string, defaultValue: any) => {
+        try {
+          const res = await fetch(url);
+          if (!res.ok) {
+            console.warn(`Fetch to ${url} returned status ${res.status}`);
+            return defaultValue;
+          }
+          return await res.json();
+        } catch (e) {
+          console.error(`Failed to fetch ${url}, using default:`, e);
+          return defaultValue;
+        }
+      };
+
       const [
         prodsRes, salesRes, expRes, supsRes, markRes, 
         ordRes, loyRes, empsRes, commRes, auditRes, healthRes
       ] = await Promise.all([
-        fetch(endpointMap.products).then(r => r.json()),
-        fetch(endpointMap.sales).then(r => r.json()),
-        fetch(endpointMap.expenses).then(r => r.json()),
-        fetch(endpointMap.suppliers).then(r => r.json()),
-        fetch(endpointMap.marketplace).then(r => r.json()),
-        fetch(endpointMap.supplierOrders).then(r => r.json()),
-        fetch(endpointMap.loyalty).then(r => r.json()),
-        fetch(endpointMap.employees).then(r => r.json()),
-        fetch(endpointMap.community).then(r => r.json()),
-        fetch(endpointMap.auditLogs).then(r => r.json()),
-        fetch(endpointMap.health).then(r => r.json()),
+        fetchJsonOrDefault(endpointMap.products, []),
+        fetchJsonOrDefault(endpointMap.sales, []),
+        fetchJsonOrDefault(endpointMap.expenses, []),
+        fetchJsonOrDefault(endpointMap.suppliers, []),
+        fetchJsonOrDefault(endpointMap.marketplace, []),
+        fetchJsonOrDefault(endpointMap.supplierOrders, []),
+        fetchJsonOrDefault(endpointMap.loyalty, []),
+        fetchJsonOrDefault(endpointMap.employees, []),
+        fetchJsonOrDefault(endpointMap.community, []),
+        fetchJsonOrDefault(endpointMap.auditLogs, []),
+        fetchJsonOrDefault(endpointMap.health, { score: 'Good', scoreValue: 85, lowStockCount: 0, expiringSoonCount: 0, revenueToday: 0, transactionsToday: 0, profitMargin: 0 }),
       ]);
 
       let loadedLiveFromSupabase = false;
@@ -995,39 +1147,186 @@ export default function App() {
     setToastNotif(`⚡ Isolated Tenant Database Created!`);
   };
 
-  const handleSaaSSignIn = (e: React.FormEvent) => {
+  const handleSaaSSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!authEmail || !authPassword) return;
 
-    if (authEmail.includes('admin') || authPassword.length >= 4) {
-      setTwoFactorRequested(true);
-      logUserAction('SaaS Authentication Challenge', `Triggered 2FA credentials challenge block for email ${authEmail}`);
+    if (hasSupabaseConfig && supabase) {
+      setLoading(true);
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: authEmail,
+          password: authPassword
+        });
+        if (error) throw error;
+        setToastNotif("🔓 Signed in successfully using Supabase Auth!");
+      } catch (err: any) {
+        alert("Authentication failed: " + (err.message || err));
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      // Offline mock authentication flow
+      if (authEmail.includes('admin') || authPassword.length >= 4) {
+        setTwoFactorRequested(true);
+        logUserAction('SaaS Authentication Challenge', `Triggered 2FA credentials challenge block for email ${authEmail}`);
+      } else {
+        alert("Invalid mock credentials (password must be at least 4 chars)");
+      }
     }
   };
 
   const handleVerifyOTP = (e: React.FormEvent) => {
     e.preventDefault();
-    setSession({
+    const mockSession = {
       fullname: authFullname || 'Thabo Shabalala',
       email: authEmail,
       phone: authPhone || '072 555 9911',
-      role: 'Owner',
+      role: 'Owner' as const,
       isAuthenticated: true
-    });
+    };
+    setSession(mockSession);
+    localStorage.setItem('spazaflow_offline_session', JSON.stringify(mockSession));
     setTwoFactorRequested(false);
     logUserAction('SaaS Authentication Success', `2FA verification checks passed. JWT generated for email ${authEmail}`);
   };
 
-  const handleSaaSSignup = (e: React.FormEvent) => {
+  const handleSaaSSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSession({
-      fullname: authFullname || 'Mpho Sithole',
-      email: authEmail,
-      phone: authPhone || '083 444 1212',
-      role: 'Owner',
-      isAuthenticated: true
-    });
-    setToastNotif(`🎉 Welcome to SpazaFlow! Account created.`);
+    if (!authEmail || !authPassword || !authFullname) return;
+
+    if (hasSupabaseConfig && supabase) {
+      setLoading(true);
+      try {
+        const { data, error } = await supabase.auth.signUp({
+          email: authEmail,
+          password: authPassword,
+          options: {
+            data: {
+              fullname: authFullname,
+              phone: authPhone
+            }
+          }
+        });
+        if (error) throw error;
+        
+        const user = data.user;
+        if (user) {
+          // Create user first business
+          const businessName = `${authFullname}'s Tuck Shop`;
+          const slug = businessName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+          
+          const { data: insertedBiz, error: bizError } = await supabase.from('businesses').insert({
+            name: businessName,
+            slug: slug,
+            owner_id: user.id,
+            plan_tier: 'Free',
+            subscription_status: 'Active'
+          }).select();
+          
+          if (bizError) throw bizError;
+          const targetBizId = insertedBiz?.[0]?.id;
+
+          const newProfile = {
+            id: user.id,
+            fullname: authFullname,
+            phone: authPhone,
+            email: authEmail,
+            role: 'Owner',
+            current_business_id: targetBizId,
+            email_verified: false
+          };
+          
+          const { error: profileError } = await supabase.from('profiles').insert(newProfile);
+          if (profileError) throw profileError;
+
+          setToastNotif(`🎉 Welcome to SpazaFlow! Please verify your email.`);
+        }
+      } catch (err: any) {
+        alert("Registration failed: " + (err.message || err));
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      // Mock signup flow
+      const mockSession = {
+        fullname: authFullname || 'Mpho Sithole',
+        email: authEmail,
+        phone: authPhone || '083 444 1212',
+        role: 'Owner' as const,
+        isAuthenticated: true
+      };
+      setSession(mockSession);
+      localStorage.setItem('spazaflow_offline_session', JSON.stringify(mockSession));
+      setToastNotif(`🎉 Welcome to SpazaFlow! Sandbox account created.`);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    if (hasSupabaseConfig && supabase) {
+      try {
+        const { error } = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: {
+            redirectTo: window.location.origin
+          }
+        });
+        if (error) throw error;
+      } catch (err: any) {
+        alert("Google Authentication failed: " + (err.message || err));
+      }
+    } else {
+      // Mock Google Login
+      const mockSession = {
+        fullname: 'Zama Buthelezi (Google)',
+        email: 'zama.buthelezi@gmail.com',
+        phone: '082 999 4433',
+        role: 'Owner' as const,
+        isAuthenticated: true
+      };
+      setSession(mockSession);
+      localStorage.setItem('spazaflow_offline_session', JSON.stringify(mockSession));
+      setToastNotif("🎉 Mock Google Login succeeded!");
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    if (!authEmail) {
+      alert("Please enter your business email first.");
+      return;
+    }
+    if (hasSupabaseConfig && supabase) {
+      try {
+        const { error } = await supabase.auth.resetPasswordForEmail(authEmail, {
+          redirectTo: window.location.origin
+        });
+        if (error) throw error;
+        alert("A secure Supabase auth reset token link has been dispatched to your email!");
+        setAuthMode('signin');
+      } catch (err: any) {
+        alert("Password reset request failed: " + (err.message || err));
+      }
+    } else {
+      alert("Mock recovery link dispatched to: " + authEmail);
+      setAuthMode('signin');
+    }
+  };
+
+  const handleSignOut = async () => {
+    if (confirm("Log out of your SpazaFlow credentials?")) {
+      if (hasSupabaseConfig && supabase) {
+        await supabase.auth.signOut();
+      } else {
+        setSession({
+          fullname: '',
+          email: '',
+          phone: '',
+          role: 'Owner',
+          isAuthenticated: false
+        });
+        localStorage.removeItem('spazaflow_offline_session');
+      }
+    }
   };
 
   const handleUpgradePlan = (tier: 'Free' | 'Starter' | 'Business' | 'Enterprise') => {
@@ -1178,9 +1477,25 @@ export default function App() {
 
               <button
                 type="submit"
-                className="w-full py-3 bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl text-xs font-bold cursor-pointer transition-all uppercase"
+                className="w-full py-3 bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl text-xs font-bold cursor-pointer transition-all uppercase tracking-wider shadow-lg shadow-indigo-650/15"
               >
                 Sign In with Supabase Identity
+              </button>
+
+              <div className="relative my-4 flex items-center justify-center">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-white/5"></div>
+                </div>
+                <span className="relative px-3 bg-[#141416] text-[10px] uppercase font-bold text-gray-500 tracking-wider">Or continue with</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleGoogleLogin}
+                className="w-full py-2.5 bg-white/5 hover:bg-white/10 text-white border border-white/5 rounded-xl text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-2"
+              >
+                <div className="w-4 h-4 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin-slow shrink-0" />
+                <span>Google Account Auth SSO</span>
               </button>
 
               <div className="text-center pt-2">
@@ -1229,11 +1544,42 @@ export default function App() {
                 </div>
               </div>
 
+              <div className="space-y-1.5">
+                <label className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Passphrase Security Key</label>
+                <div className="relative">
+                  <Lock className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-500" />
+                  <input
+                    type="password"
+                    required
+                    placeholder="••••••••"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    className="w-full bg-[#0A0A0B] border border-white/10 pl-11 pr-4 py-3 rounded-xl text-xs font-semibold outline-none text-white focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
               <button
                 type="submit"
-                className="w-full py-3 bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl text-xs font-bold cursor-pointer transition-all uppercase"
+                className="w-full py-3 bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl text-xs font-bold cursor-pointer transition-all uppercase tracking-wider shadow-lg shadow-indigo-650/15"
               >
                 Register & Initialize DB
+              </button>
+
+              <div className="relative my-4 flex items-center justify-center">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-white/5"></div>
+                </div>
+                <span className="relative px-3 bg-[#141416] text-[10px] uppercase font-bold text-gray-500 tracking-wider">Or register with</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleGoogleLogin}
+                className="w-full py-2.5 bg-white/5 hover:bg-white/10 text-white border border-white/5 rounded-xl text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-2"
+              >
+                <div className="w-4 h-4 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin-slow shrink-0" />
+                <span>Google SSO Quick Sign Up</span>
               </button>
 
               <div className="text-center pt-2">
@@ -1247,11 +1593,13 @@ export default function App() {
               <input
                 type="email"
                 placeholder="merchant@kasi.za"
-                className="w-full bg-[#0A0A0B] border border-white/10 px-4 py-3 rounded-xl text-xs outline-none text-white"
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                className="w-full bg-[#0A0A0B] border border-white/10 px-4 py-3 rounded-xl text-xs outline-none text-white font-semibold"
               />
               <button
-                onClick={() => { alert("Password reset link shared!"); setAuthMode('signin'); }}
-                className="w-full py-2.5 bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl text-xs font-bold font-sans"
+                onClick={handlePasswordReset}
+                className="w-full py-2.5 bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl text-xs font-bold font-sans uppercase tracking-wider"
               >
                 Send Recovery link
               </button>
@@ -1389,11 +1737,7 @@ export default function App() {
 
           {/* USER SIGN OUT PROFILE */}
           <button
-            onClick={() => {
-              if (confirm("Log out of your SpazaFlow credentials?")) {
-                setSession(prev => ({ ...prev, isAuthenticated: false }));
-              }
-            }}
+            onClick={handleSignOut}
             className="p-2.5 rounded-xl border border-white/10 bg-[#141416] text-[#F4F4F5] hover:bg-white/5 text-[11px] font-extrabold flex items-center gap-1.5"
             title="Log out of SaaS session"
           >
