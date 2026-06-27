@@ -24,6 +24,17 @@ const PORT = 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Custom CORS Middleware to prevent iframe fetch/CORS blocks
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Business-Id");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 // Setup Gemini Client
 const getGeminiClient = () => {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -173,10 +184,21 @@ const defaultDatabase = {
   auditLogs: [
     { id: "a1", timestamp: new Date(Date.now() - 4 * 3600000).toISOString(), user: "Thabo Shabalala", role: "Manager", action: "Stock Adjustment", details: "Huletts Brown Sugar verified counting" },
     { id: "a2", timestamp: new Date(Date.now() - 2 * 3600000).toISOString(), user: "Sipho Khumalo", role: "Cashier", action: "Clock In", details: "Shift starter check-in at 07:58" }
-  ] as AuditLog[]
+  ] as AuditLog[],
+
+  users: [
+    { email: "thabo@spazaflow.co.za", password: "admin", fullname: "Thabo Shabalala", phone: "072 123 4567", role: "Owner", businessId: "b_soweto1" },
+    { email: "owner@spaza.co.za", password: "admin", fullname: "Zama Buthelezi", phone: "082 999 4433", role: "Owner", businessId: "b_soweto1" }
+  ] as any[],
+
+  businesses: [
+    { id: "b_soweto1", name: "Sizwe Kasi Tuck Shop", slug: "sizwe-kasi-soweto", plan_tier: "Business", subscription_status: "Active", location: "Orlando West, Soweto" },
+    { id: "b_alexfresh", name: "Alexandra Staples Depot", slug: "alex-fresh-coop", plan_tier: "Starter", subscription_status: "Active", location: "Alexandra, JHB" },
+    { id: "b_mplain", name: "Mitchells Plain Tuck Mart", slug: "mplain-mart", plan_tier: "Free", subscription_status: "Active", location: "Mitchells Plain, CT" }
+  ] as any[]
 };
 
-let db = { ...defaultDatabase };
+let db: any = { ...defaultDatabase };
 
 // Load database file helper
 function loadDatabase() {
@@ -184,6 +206,8 @@ function loadDatabase() {
     if (fs.existsSync(DB_FILE)) {
       const data = fs.readFileSync(DB_FILE, "utf-8");
       db = JSON.parse(data);
+      if (!db.users) db.users = [...defaultDatabase.users];
+      if (!db.businesses) db.businesses = [...defaultDatabase.businesses];
       console.log("Database successfully loaded from " + DB_FILE);
     } else {
       console.log("No existing database file found. Seeding new township database database...");
@@ -209,6 +233,125 @@ loadDatabase();
 
 // --- BACKEND API ROUTING ---
 
+// Helper to extract active business id from request headers
+const getBizId = (req: any) => {
+  return (req.headers["x-business-id"] || "b_soweto1") as string;
+};
+
+// Authentication Endpoints
+app.post("/api/auth/signup", (req, res) => {
+  const { email, password, fullname, phone } = req.body;
+  if (!email || !password || !fullname) {
+    return res.status(400).json({ error: "Email, password, and Full Name are required." });
+  }
+
+  const existingUser = db.users.find((u: any) => u.email.toLowerCase() === email.toLowerCase());
+  if (existingUser) {
+    return res.status(400).json({ error: "An account with this email address already exists." });
+  }
+
+  // Create isolated business tenant for this new merchant
+  const businessName = `${fullname}'s Tuck Shop`;
+  const slug = businessName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+  const businessId = "b_" + Date.now();
+
+  const newBusiness = {
+    id: businessId,
+    name: businessName,
+    slug: slug,
+    plan_tier: "Free",
+    subscription_status: "Active",
+    location: "Soweto, Johannesburg"
+  };
+
+  const newUser = {
+    email: email.toLowerCase(),
+    password,
+    fullname,
+    phone: phone || "072 555 9911",
+    role: "Owner",
+    businessId: businessId
+  };
+
+  db.users.push(newUser);
+  db.businesses.push(newBusiness);
+
+  // Pre-seed baseline products for this new merchant so they don't start empty
+  const defaultProducts = [
+    { id: "p1_" + businessId, businessId, name: "Tastic Rice 2kg", barcode: "6001001235123", category: "Staples", costPrice: 42.00, sellingPrice: 52.00, stock: 15, minStock: 8, expiryDate: "2027-04-12", fastSelling: true, slowMoving: false, imageUrl: "" },
+    { id: "p2_" + businessId, businessId, name: "Iwisa Maize Meal 5kg", barcode: "6001122334455", category: "Staples", costPrice: 65.00, sellingPrice: 78.00, stock: 24, minStock: 10, expiryDate: "2026-12-05", fastSelling: true, slowMoving: false, imageUrl: "" },
+    { id: "p3_" + businessId, businessId, name: "Albany White Bread 700g", barcode: "6002233445566", category: "Bakery", costPrice: 14.50, sellingPrice: 18.50, stock: 4, minStock: 10, expiryDate: "2026-06-23", fastSelling: true, slowMoving: false, imageUrl: "" },
+    { id: "p4_" + businessId, businessId, name: "Coca-Cola 2L", barcode: "5449000000996", category: "Beverages", costPrice: 19.00, sellingPrice: 24.50, stock: 35, minStock: 15, expiryDate: "2026-11-20", fastSelling: true, slowMoving: false, imageUrl: "" }
+  ];
+  db.products.push(...defaultProducts);
+
+  // Log audit action
+  db.auditLogs.unshift({
+    id: "a_" + Date.now(),
+    timestamp: new Date().toISOString(),
+    user: fullname,
+    role: "Owner",
+    action: "Merchant Registered",
+    details: `Signed up new business tenant: ${businessName}`
+  });
+
+  saveDatabase();
+
+  return res.json({
+    user: {
+      fullname: newUser.fullname,
+      email: newUser.email,
+      phone: newUser.phone,
+      role: newUser.role,
+      businessId: newUser.businessId
+    },
+    business: newBusiness
+  });
+});
+
+app.post("/api/auth/signin", (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: "Email and password are required." });
+  }
+
+  const user = db.users.find((u: any) => u.email.toLowerCase() === email.toLowerCase());
+  if (!user || user.password !== password) {
+    return res.status(400).json({ error: "Invalid email address or security password." });
+  }
+
+  const business = db.businesses.find((b: any) => b.id === user.businessId) || {
+    id: user.businessId || "b_soweto1",
+    name: `${user.fullname}'s Tuck Shop`,
+    slug: "sizwe-kasi-soweto",
+    plan_tier: "Business",
+    subscription_status: "Active",
+    location: "Soweto, Johannesburg"
+  };
+
+  db.auditLogs.unshift({
+    id: "a_" + Date.now(),
+    timestamp: new Date().toISOString(),
+    user: user.fullname,
+    role: user.role,
+    action: "User Sign In",
+    details: `Logged into operations console for: ${business.name}`
+  });
+
+  saveDatabase();
+
+  return res.json({
+    user: {
+      fullname: user.fullname,
+      email: user.email,
+      phone: user.phone,
+      role: user.role,
+      businessId: user.businessId
+    },
+    business: business
+  });
+});
+
 // Reset endpoint
 app.post("/api/reset", (req, res) => {
   db = JSON.parse(JSON.stringify(defaultDatabase));
@@ -218,17 +361,20 @@ app.post("/api/reset", (req, res) => {
 
 // Products: GET, POST
 app.get("/api/products", (req, res) => {
-  res.json(db.products);
+  const bizId = getBizId(req);
+  const filtered = db.products.filter((p: any) => p.businessId === bizId || !p.businessId);
+  res.json(filtered);
 });
 
 app.post("/api/products", (req, res) => {
+  const bizId = getBizId(req);
   const { id, name, barcode, category, costPrice, sellingPrice, stock, minStock, expiryDate, fastSelling, slowMoving } = req.body;
   
   if (!name || isNaN(costPrice) || isNaN(sellingPrice) || isNaN(stock)) {
     return res.status(400).json({ error: "Missing required core parameters or invalid types" });
   }
 
-  const existingIndex = db.products.findIndex(p => p.id === id || (p.barcode && p.barcode === barcode));
+  const existingIndex = db.products.findIndex((p: any) => (p.id === id || (p.barcode && p.barcode === barcode)) && (p.businessId === bizId || !p.businessId));
 
   if (existingIndex > -1) {
     // Edit existing product
@@ -250,6 +396,7 @@ app.post("/api/products", (req, res) => {
     db.auditLogs.unshift({
       id: "a_" + Date.now(),
       timestamp: new Date().toISOString(),
+      businessId: bizId,
       user: "Current User",
       role: "Manager",
       action: "Product Updated",
@@ -260,8 +407,9 @@ app.post("/api/products", (req, res) => {
     return res.json(db.products[existingIndex]);
   } else {
     // Add new product
-    const newProduct: Product = {
+    const newProduct: any = {
       id: id || "p_" + Date.now(),
+      businessId: bizId,
       name,
       barcode: barcode || "b_" + Date.now(),
       category: category || "Groceries",
@@ -279,6 +427,7 @@ app.post("/api/products", (req, res) => {
     db.auditLogs.unshift({
       id: "a_" + Date.now(),
       timestamp: new Date().toISOString(),
+      businessId: bizId,
       user: "Current User",
       role: "Manager",
       action: "Product Created",
@@ -292,8 +441,9 @@ app.post("/api/products", (req, res) => {
 
 // Delete Product
 app.delete("/api/products/:id", (req, res) => {
+  const bizId = getBizId(req);
   const productId = req.params.id;
-  const productIndex = db.products.findIndex(p => p.id === productId);
+  const productIndex = db.products.findIndex((p: any) => p.id === productId && (p.businessId === bizId || !p.businessId));
 
   if (productIndex === -1) {
     return res.status(404).json({ error: "Product not found" });
@@ -305,6 +455,7 @@ app.delete("/api/products/:id", (req, res) => {
   db.auditLogs.unshift({
     id: "a_" + Date.now(),
     timestamp: new Date().toISOString(),
+    businessId: bizId,
     user: "Current User",
     role: "Manager",
     action: "Product Deleted",
@@ -317,10 +468,13 @@ app.delete("/api/products/:id", (req, res) => {
 
 // Sales Routing
 app.get("/api/sales", (req, res) => {
-  res.json(db.sales);
+  const bizId = getBizId(req);
+  const filtered = db.sales.filter((s: any) => s.businessId === bizId || !s.businessId);
+  res.json(filtered);
 });
 
 app.post("/api/sales", (req, res) => {
+  const bizId = getBizId(req);
   const { items, paymentMethod, paidAmount, customerPhone, cashierName } = req.body;
 
   if (!items || !items.length) {
@@ -330,7 +484,7 @@ app.post("/api/sales", (req, res) => {
   // Double check inventory and tally totals
   let subtotal = 0;
   const processedItems = items.map((cartItem: any) => {
-    const originalProd = db.products.find(p => p.id === cartItem.productId);
+    const originalProd = db.products.find((p: any) => p.id === cartItem.productId && (p.businessId === bizId || !p.businessId));
     const salePrice = cartItem.price || (originalProd?.sellingPrice || 0);
     const qty = Number(cartItem.quantity);
     const itemTotal = salePrice * qty;
@@ -362,7 +516,7 @@ app.post("/api/sales", (req, res) => {
   let matchesLoyalty = null;
   if (customerPhone) {
     const formattedPhone = customerPhone.trim();
-    const loyaltyUser = db.loyalty.find(l => l.phone === formattedPhone || l.phone.includes(formattedPhone));
+    const loyaltyUser = db.loyalty.find((l: any) => (l.phone === formattedPhone || l.phone.includes(formattedPhone)) && (l.businessId === bizId || !l.businessId));
     if (loyaltyUser) {
       // 1 point earned for every R10 spent in South Africa
       pointsEarned = Math.floor(total / 10);
@@ -372,8 +526,9 @@ app.post("/api/sales", (req, res) => {
     }
   }
 
-  const newSale: Sale = {
+  const newSale: any = {
     id: "s_" + Date.now(),
+    businessId: bizId,
     items: processedItems,
     subtotal: roundedSubtotal,
     vat: vat,
@@ -393,6 +548,7 @@ app.post("/api/sales", (req, res) => {
   db.auditLogs.unshift({
     id: "a_" + Date.now(),
     timestamp: new Date().toISOString(),
+    businessId: bizId,
     user: cashierName || "Sipho Khumalo",
     role: "Cashier",
     action: "Recorded Sale",
@@ -405,17 +561,21 @@ app.post("/api/sales", (req, res) => {
 
 // Expenses Routing
 app.get("/api/expenses", (req, res) => {
-  res.json(db.expenses);
+  const bizId = getBizId(req);
+  const filtered = db.expenses.filter((e: any) => e.businessId === bizId || !e.businessId);
+  res.json(filtered);
 });
 
 app.post("/api/expenses", (req, res) => {
+  const bizId = getBizId(req);
   const { category, amount, description } = req.body;
   if (!category || isNaN(amount)) {
     return res.status(400).json({ error: "Invalid dynamic expense body parameters." });
   }
 
-  const newExpense: Expense = {
+  const newExpense: any = {
     id: "e_" + Date.now(),
+    businessId: bizId,
     category,
     amount: Number(amount),
     description: description || "",
@@ -427,6 +587,7 @@ app.post("/api/expenses", (req, res) => {
   db.auditLogs.unshift({
     id: "a_" + Date.now(),
     timestamp: new Date().toISOString(),
+    businessId: bizId,
     user: "Current User",
     role: "Manager",
     action: "Expense Added",
@@ -439,17 +600,21 @@ app.post("/api/expenses", (req, res) => {
 
 // Suppliers Portal
 app.get("/api/suppliers", (req, res) => {
-  res.json(db.suppliers);
+  const bizId = getBizId(req);
+  const filtered = db.suppliers.filter((s: any) => s.businessId === bizId || !s.businessId);
+  res.json(filtered);
 });
 
 app.post("/api/suppliers", (req, res) => {
+  const bizId = getBizId(req);
   const { name, contactPerson, phone, email, category, address } = req.body;
   if (!name) {
     return res.status(400).json({ error: "Supplier name is core parameter." });
   }
 
-  const newSupplier: Supplier = {
+  const newSupplier: any = {
     id: "sup_" + Date.now(),
+    businessId: bizId,
     name,
     contactPerson: contactPerson || "",
     phone: phone || "",
@@ -469,17 +634,21 @@ app.get("/api/marketplace", (req, res) => {
 });
 
 app.get("/api/supplier-orders", (req, res) => {
-  res.json(db.supplierOrders);
+  const bizId = getBizId(req);
+  const filtered = db.supplierOrders.filter((o: any) => o.businessId === bizId || !o.businessId);
+  res.json(filtered);
 });
 
 app.post("/api/supplier-orders", (req, res) => {
+  const bizId = getBizId(req);
   const { supplierId, supplierName, items, total } = req.body;
   if (!supplierId || !items || !items.length) {
     return res.status(400).json({ error: "Empty purchase items for marketplace bulk supplier order." });
   }
 
-  const newOrder: SupplierOrder = {
+  const newOrder: any = {
     id: "ord_" + Date.now(),
+    businessId: bizId,
     supplierId,
     supplierName,
     items,
@@ -493,16 +662,16 @@ app.post("/api/supplier-orders", (req, res) => {
 
   // Auto approve simulation immediately for easy UI interactions and stock replenishments
   setTimeout(() => {
-    const orderInDb = db.supplierOrders.find(o => o.id === newOrder.id);
+    const orderInDb = db.supplierOrders.find((o: any) => o.id === newOrder.id);
     if (orderInDb) {
       orderInDb.status = 'Delivered';
       
       // Auto replenish stock on delivery!
-      orderInDb.items.forEach(orderItem => {
+      orderInDb.items.forEach((orderItem: any) => {
         // Find if we have a match in products
         const nameKeywords = orderItem.name.split(" ");
         const firstKeyword = nameKeywords[0];
-        const match = db.products.find(p => p.name.toLowerCase().includes(firstKeyword.toLowerCase()) || orderItem.name.toLowerCase().includes(p.name.toLowerCase()));
+        const match = db.products.find((p: any) => (p.name.toLowerCase().includes(firstKeyword.toLowerCase()) || orderItem.name.toLowerCase().includes(p.name.toLowerCase())) && (p.businessId === bizId || !p.businessId));
         if (match) {
           match.stock += orderItem.quantity;
         }
@@ -511,6 +680,7 @@ app.post("/api/supplier-orders", (req, res) => {
       // Insert relative auto expense on delivery arrival
       db.expenses.unshift({
         id: "e_" + Date.now(),
+        businessId: bizId,
         category: "Supplier Stock",
         amount: orderInDb.total,
         description: `Delivered Inventory PO: ${orderInDb.supplierName}`,
@@ -520,6 +690,7 @@ app.post("/api/supplier-orders", (req, res) => {
       db.auditLogs.unshift({
         id: "a_" + Date.now(),
         timestamp: new Date().toISOString(),
+        businessId: bizId,
         user: "System Wholesaler",
         role: "Supplier",
         action: "Order Delivered",
@@ -533,6 +704,7 @@ app.post("/api/supplier-orders", (req, res) => {
   db.auditLogs.unshift({
     id: "a_" + Date.now(),
     timestamp: new Date().toISOString(),
+    businessId: bizId,
     user: "Current User",
     role: "Manager",
     action: "Purchase Order Shared",
@@ -545,23 +717,27 @@ app.post("/api/supplier-orders", (req, res) => {
 
 // Loyalty Routing
 app.get("/api/loyalty", (req, res) => {
-  res.json(db.loyalty);
+  const bizId = getBizId(req);
+  const filtered = db.loyalty.filter((l: any) => l.businessId === bizId || !l.businessId);
+  res.json(filtered);
 });
 
 app.post("/api/loyalty", (req, res) => {
+  const bizId = getBizId(req);
   const { name, phone, referrals } = req.body;
   if (!name || !phone) {
     return res.status(400).json({ error: "Missing loyalty profile core factors." });
   }
 
   const formattedPhone = phone.trim();
-  const alreadyExists = db.loyalty.find(l => l.phone === formattedPhone);
+  const alreadyExists = db.loyalty.find((l: any) => l.phone === formattedPhone && (l.businessId === bizId || !l.businessId));
   if (alreadyExists) {
     return res.status(400).json({ error: "Phone number already connected to a loyalty card!" });
   }
 
-  const newLoyty: CustomerLoyalty = {
+  const newLoyty: any = {
     id: "l_" + Date.now(),
+    businessId: bizId,
     name,
     phone: formattedPhone,
     points: 10, // signup bonus R10 value/points
@@ -580,12 +756,15 @@ app.post("/api/loyalty", (req, res) => {
 
 // Employee Logs
 app.get("/api/employees", (req, res) => {
-  res.json(db.employees);
+  const bizId = getBizId(req);
+  const filtered = db.employees.filter((e: any) => e.businessId === bizId || !e.businessId);
+  res.json(filtered);
 });
 
 app.post("/api/employees/attendance", (req, res) => {
+  const bizId = getBizId(req);
   const { employeeId, isClockIn } = req.body;
-  const emp = db.employees.find(e => e.id === employeeId);
+  const emp = db.employees.find((e: any) => e.id === employeeId && (e.businessId === bizId || !e.businessId));
   if (!emp) {
     return res.status(404).json({ error: "Employee account not registered." });
   }
@@ -595,7 +774,8 @@ app.post("/api/employees/attendance", (req, res) => {
 
   if (isClockIn) {
     // Check if clocked in today
-    const alreadyClocked = emp.attendance.find(a => a.date === todayStr);
+    if (!emp.attendance) emp.attendance = [];
+    const alreadyClocked = emp.attendance.find((a: any) => a.date === todayStr);
     if (alreadyClocked) {
       return res.status(400).json({ error: "Employee already clock-in today!" });
     }
@@ -610,6 +790,7 @@ app.post("/api/employees/attendance", (req, res) => {
     db.auditLogs.unshift({
       id: "a_" + Date.now(),
       timestamp: new Date().toISOString(),
+      businessId: bizId,
       user: emp.name,
       role: emp.role,
       action: "Attendance Check-In",
@@ -617,7 +798,8 @@ app.post("/api/employees/attendance", (req, res) => {
     });
   } else {
     // Clock-out
-    const activeAtt = emp.attendance.find(a => a.date === todayStr);
+    if (!emp.attendance) emp.attendance = [];
+    const activeAtt = emp.attendance.find((a: any) => a.date === todayStr);
     if (!activeAtt) {
       return res.status(400).json({ error: "No clock-in shift found for today!" });
     }
@@ -626,6 +808,7 @@ app.post("/api/employees/attendance", (req, res) => {
     db.auditLogs.unshift({
       id: "a_" + Date.now(),
       timestamp: new Date().toISOString(),
+      businessId: bizId,
       user: emp.name,
       role: emp.role,
       action: "Attendance Check-Out",
@@ -643,13 +826,15 @@ app.get("/api/community", (req, res) => {
 });
 
 app.post("/api/community", (req, res) => {
+  const bizId = getBizId(req);
   const { spazaName, phone, productName, quantity, askingPrice, location, description } = req.body;
   if (!productName || isNaN(quantity) || isNaN(askingPrice)) {
     return res.status(400).json({ error: "Trade items need product, quantity, asking price parameters." });
   }
 
-  const exchangeItem: CommunityMarketplaceItem = {
+  const exchangeItem: any = {
     id: "c_" + Date.now(),
+    businessId: bizId,
     ownerSpazaName: spazaName || "Unnamed Spaza",
     ownerPhone: phone || "0720001122",
     productName,
@@ -667,8 +852,9 @@ app.post("/api/community", (req, res) => {
 });
 
 app.post("/api/community/accept/:id", (req, res) => {
+  const bizId = getBizId(req);
   const itemId = req.params.id;
-  const item = db.communityExchange.find(i => i.id === itemId);
+  const item = db.communityExchange.find((i: any) => i.id === itemId);
   if (!item) {
     return res.status(404).json({ error: "Listing id incorrect." });
   }
@@ -678,6 +864,7 @@ app.post("/api/community/accept/:id", (req, res) => {
   db.auditLogs.unshift({
     id: "a_" + Date.now(),
     timestamp: new Date().toISOString(),
+    businessId: bizId,
     user: "Current User",
     role: "Manager",
     action: "Kasi Exchange Accepted",
@@ -690,15 +877,18 @@ app.post("/api/community/accept/:id", (req, res) => {
 
 // Audit Logs Route
 app.get("/api/audit", (req, res) => {
-  res.json(db.auditLogs);
+  const bizId = getBizId(req);
+  const filtered = db.auditLogs.filter((l: any) => l.businessId === bizId || !l.businessId);
+  res.json(filtered);
 });
 
 // Dynamic Business health calculator
 app.get("/api/health-score", (req, res) => {
   try {
+    const bizId = getBizId(req);
     const todayStr = new Date().toISOString().split('T')[0];
-    const salesArr = db.sales || [];
-    const productsArr = db.products || [];
+    const salesArr = (db.sales || []).filter((s: any) => s.businessId === bizId || !s.businessId);
+    const productsArr = (db.products || []).filter((p: any) => p.businessId === bizId || !p.businessId);
 
     const todaySales = salesArr.filter(s => s && s.timestamp && typeof s.timestamp === 'string' && s.timestamp.startsWith(todayStr));
     const revenueToday = todaySales.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
