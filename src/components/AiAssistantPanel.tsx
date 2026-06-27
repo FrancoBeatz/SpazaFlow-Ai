@@ -10,7 +10,7 @@ export default function AiAssistantPanel() {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
-      content: "Aweh, my Leader! 🌟 I am your **SpazaFlow AI township business growth commander**.\n\nI can analyze your live sales ledger, shelf products catalog, low stock counts, and suppliers marketplace to answer specific queries or create marketing flyers. \n\nClick one of the suggested reports below, or type your custom bookkeeping question!"
+      content: "Hello! 🌟 I am your **SpazaFlow Business Assistant**.\n\nI can analyze your sales ledger, product catalog, low stock counts, and supplier marketplace to answer specific queries or help you create promotional flyers. \n\nClick one of the suggested reports below, or type your custom question!"
     }
   ]);
   const [inputVal, setInputVal] = useState('');
@@ -22,7 +22,7 @@ export default function AiAssistantPanel() {
     { label: "🏆 Which products sell the most?", query: "Which products sell the most?" },
     { label: "🚨 What should I restock today?", query: "What should I restock? Predict stock shortages." },
     { label: "📊 Bookkeeping: How much profit did I make?", query: "How much profit did I make this month? Compare revenues & expenses." },
-    { label: "📱 Write a WhatsApp promotion status special", query: "Generate promotional material status flyer for WhatsApp specials." }
+    { label: "📱 Write a WhatsApp promotion status update", query: "Generate promotional material status flyer for WhatsApp specials." }
   ];
 
   // Auto-scroll on message addition
@@ -56,7 +56,7 @@ export default function AiAssistantPanel() {
       console.error(error);
       setMessages([...nextMsgs, { 
         role: 'assistant', 
-        content: "Aweh, Chief. I couldn't reach my server cloud link right now. Please check if your network connection or GEMINI_API_KEY is defined in secrets!" 
+        content: "I couldn't reach the server right now. Please check your network connection or verify that the API key is configured." 
       }]);
     } finally {
       setLoading(false);
@@ -71,10 +71,10 @@ export default function AiAssistantPanel() {
         <div className="space-y-4">
           <div className="flex items-center gap-2 text-white">
             <Compass className="w-5 h-5 text-indigo-400" />
-            <h4 className="font-bold text-sm">Suggested AI Prompts</h4>
+            <h4 className="font-bold text-sm">Suggested Prompts</h4>
           </div>
           <p className="text-gray-400 text-xs leading-relaxed">
-            Quickly trigger automated financial health analysis or promotional WhatsApp status text drafts rooted in your live spaza records database.
+            Quickly generate financial reports or write promotional WhatsApp status updates based on your actual shop database.
           </p>
 
           <div className="space-y-2 pt-2">
@@ -92,11 +92,11 @@ export default function AiAssistantPanel() {
         </div>
 
         {/* Diagnostic Key indicators */}
-        <div className="p-3 bg-white/5 border border-white/5 rounded-xl flex items-center gap-2.5 mt-4 text-[11px] text-slate-505 select-none font-mono">
+        <div className="p-3 bg-white/5 border border-white/5 rounded-xl flex items-center gap-2.5 mt-4 text-[11px] select-none font-mono">
           <Cpu className="w-4 h-4 text-slate-400 shrink-0" />
           <div className="leading-normal">
-            <span className="font-bold text-gray-200">Core Engine Grounded:</span>
-            <span className="block text-[10px] text-gray-400">Grounded via live DB sales & products list context</span>
+            <span className="font-bold text-gray-200">Grounded Context:</span>
+            <span className="block text-[10px] text-gray-400">Using live product and sales context</span>
           </div>
         </div>
       </div>
@@ -110,8 +110,8 @@ export default function AiAssistantPanel() {
             <Sparkles className="w-4 h-4" />
           </div>
           <div>
-            <h4 className="font-extrabold text-white text-sm">SpazaFlow AI Grounded Copilot</h4>
-            <span className="text-[10px] text-gray-500 font-mono">Running @google/genai (model: gemini-3.5-flash)</span>
+            <h4 className="font-extrabold text-white text-sm">SpazaFlow Assistant</h4>
+            <span className="text-[10px] text-gray-500 font-mono">Powered by Smart Analytics</span>
           </div>
         </div>
 
@@ -126,7 +126,7 @@ export default function AiAssistantPanel() {
               <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 select-none ${
                 m.role === 'user' ? 'bg-indigo-600 text-white' : 'bg-white/10 text-white'
               }`}>
-                {m.role === 'user' ? 'ME' : 'AI'}
+                {m.role === 'user' ? 'ME' : 'AS'}
               </div>
 
               {/* Message content box */}
@@ -168,13 +168,13 @@ export default function AiAssistantPanel() {
           {loading && (
             <div className="flex gap-3 mr-auto max-w-[80%] items-center select-none">
               <div className="w-8 h-8 rounded-full bg-[#0A0A0B] border border-white/10 text-white flex items-center justify-center font-bold text-xs shrink-0 font-sans">
-                AI
+                AS
               </div>
               <div className="p-3 bg-white/5 border border-white/5 rounded-2xl rounded-tl-none text-gray-400 text-xs flex items-center gap-1.5 font-mono">
                 <span className="inline-block w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce"></span>
                 <span className="inline-block w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce [animation-delay:0.2s]"></span>
                 <span className="inline-block w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce [animation-delay:0.4s]"></span>
-                <span>Summoning Johannesburg wholesales data ledger...</span>
+                <span>Analyzing sales and products...</span>
               </div>
             </div>
           )}
@@ -190,7 +190,7 @@ export default function AiAssistantPanel() {
           <input
             type="text"
             disabled={loading}
-            placeholder={loading ? 'Querying Gemini...' : 'Type and ask: "Which supplier is cheapest for sugar?"'}
+            placeholder={loading ? 'Analyzing...' : 'Type and ask: "Which supplier is cheapest for sugar?"'}
             value={inputVal}
             onChange={(e) => setInputVal(e.target.value)}
             className="flex-1 bg-[#0A0A0B] px-4 py-2.5 text-xs font-semibold outline-none border border-white/10 focus:border-indigo-500 rounded-xl disabled:opacity-50 text-white placeholder-gray-500"

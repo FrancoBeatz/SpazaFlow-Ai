@@ -1159,7 +1159,7 @@ export default function App() {
           password: authPassword
         });
         if (error) throw error;
-        setToastNotif("🔓 Signed in successfully using Supabase Auth!");
+        setToastNotif("🔓 Signed in successfully!");
       } catch (err: any) {
         alert("Authentication failed: " + (err.message || err));
       } finally {
@@ -1167,11 +1167,19 @@ export default function App() {
       }
     } else {
       // Offline mock authentication flow
-      if (authEmail.includes('admin') || authPassword.length >= 4) {
-        setTwoFactorRequested(true);
-        logUserAction('SaaS Authentication Challenge', `Triggered 2FA credentials challenge block for email ${authEmail}`);
+      if (authPassword.length >= 4) {
+        const mockSession = {
+          fullname: authFullname || 'Thabo Shabalala',
+          email: authEmail,
+          phone: authPhone || '072 555 9911',
+          role: 'Owner' as const,
+          isAuthenticated: true
+        };
+        setSession(mockSession);
+        localStorage.setItem('spazaflow_offline_session', JSON.stringify(mockSession));
+        setToastNotif("🔓 Signed in successfully!");
       } else {
-        alert("Invalid mock credentials (password must be at least 4 chars)");
+        alert("Invalid password (must be at least 4 characters)");
       }
     }
   };
@@ -1407,8 +1415,8 @@ export default function App() {
             <div className="w-12 h-12 bg-indigo-650 text-white rounded-2xl flex items-center justify-center font-black text-2xl italic mx-auto shadow-lg shadow-indigo-650/20">
               S
             </div>
-            <h1 className="text-2xl font-black text-white tracking-tight">SpazaFlow <span className="text-indigo-400">SaaS</span></h1>
-            <p className="text-xs text-gray-400">Enterprise operations console supporting thousands of businesses simultaneously</p>
+            <h1 className="text-2xl font-black text-white tracking-tight">SpazaFlow</h1>
+            <p className="text-xs text-gray-400">Manage your business sales, customers, and inventory in one place</p>
           </div>
 
           {twoFactorRequested ? (
@@ -1416,17 +1424,17 @@ export default function App() {
               <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-center">
                 <span className="text-xs font-bold text-indigo-400 block flex items-center justify-center gap-1">
                   <ShieldCheck className="w-4 h-4" />
-                  <span>Two-Factor Authentication (2FA) Required</span>
+                  <span>Verification Required</span>
                 </span>
-                <p className="text-[10px] text-gray-400 mt-0.5">We sent a secure validation code SMS OTP to your registered phone number.</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">Please enter the verification code sent to your phone number.</p>
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Verification OTP Code</label>
+                <label className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Verification Code</label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. 883190"
+                  placeholder="123456"
                   value={otpCode}
                   onChange={(e) => setOtpCode(e.target.value)}
                   className="w-full bg-[#0A0A0B] border border-white/10 px-4 py-3 rounded-xl text-xs font-bold outline-none text-white focus:border-indigo-500 text-center tracking-widest text-sm"
@@ -1437,19 +1445,19 @@ export default function App() {
                 type="submit"
                 className="w-full py-3 bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl text-xs font-bold cursor-pointer transition-all"
               >
-                Verify 2FA Credential Identity
+                Verify Code
               </button>
             </form>
           ) : authMode === 'signin' ? (
             <form onSubmit={handleSaaSSignIn} className="space-y-4">
               <div className="space-y-1.5">
-                <label className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Business Email Address</label>
+                <label className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Email Address</label>
                 <div className="relative">
                   <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-500" />
                   <input
                     type="email"
                     required
-                    placeholder="owner@spazaflow.co.za"
+                    placeholder="owner@spaza.co.za"
                     value={authEmail}
                     onChange={(e) => setAuthEmail(e.target.value)}
                     className="w-full bg-[#0A0A0B] border border-white/10 pl-11 pr-4 py-3 rounded-xl text-xs font-semibold outline-none text-white focus:border-indigo-500"
@@ -1459,7 +1467,7 @@ export default function App() {
 
               <div className="space-y-1.5">
                 <div className="flex justify-between items-center">
-                  <label className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Security Password</label>
+                  <label className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Password</label>
                   <button type="button" onClick={() => setAuthMode('forgot_password')} className="text-[10px] text-indigo-400 hover:underline">Forgot?</button>
                 </div>
                 <div className="relative">
@@ -1479,7 +1487,7 @@ export default function App() {
                 type="submit"
                 className="w-full py-3 bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl text-xs font-bold cursor-pointer transition-all uppercase tracking-wider shadow-lg shadow-indigo-650/15"
               >
-                Sign In with Supabase Identity
+                Sign In
               </button>
 
               <div className="relative my-4 flex items-center justify-center">
@@ -1494,13 +1502,15 @@ export default function App() {
                 onClick={handleGoogleLogin}
                 className="w-full py-2.5 bg-white/5 hover:bg-white/10 text-white border border-white/5 rounded-xl text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-2"
               >
-                <div className="w-4 h-4 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin-slow shrink-0" />
-                <span>Google Account Auth SSO</span>
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                  <path fill="#currentColor" d="M12.24 10.285V13.4h6.887c-.275 1.565-1.88 4.604-6.887 4.604-4.33 0-7.859-3.578-7.859-8s3.53-8 7.859-8c2.46 0 4.105 1.025 5.047 1.926l2.427-2.334C18.155 2.113 15.44 1 12.24 1 6.033 1 1 6.033 1 12.24s5.033 11.24 11.24 11.24c6.478 0 10.793-4.537 10.793-10.986 0-.745-.08-1.31-.176-1.879H12.24z"/>
+                </svg>
+                <span>Continue with Google</span>
               </button>
 
               <div className="text-center pt-2">
-                <span className="text-xs text-gray-400">New merchant? </span>
-                <button type="button" onClick={() => setAuthMode('signup')} className="text-xs text-indigo-400 font-bold hover:underline">Create SaaS Account</button>
+                <span className="text-xs text-gray-400">New? </span>
+                <button type="button" onClick={() => setAuthMode('signup')} className="text-xs text-indigo-400 font-bold hover:underline">Create Account</button>
               </div>
             </form>
           ) : authMode === 'signup' ? (
@@ -1518,11 +1528,11 @@ export default function App() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Business Email</label>
+                <label className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Email Address</label>
                 <input
                   type="email"
                   required
-                  placeholder="sibu@mykasispecial.com"
+                  placeholder="sibu@spaza.co.za"
                   value={authEmail}
                   onChange={(e) => setAuthEmail(e.target.value)}
                   className="w-full bg-[#0A0A0B] border border-white/10 px-4 py-3 rounded-xl text-xs font-semibold outline-none text-white focus:border-indigo-500"
@@ -1530,7 +1540,7 @@ export default function App() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Contact Phone</label>
+                <label className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Phone Number</label>
                 <div className="relative">
                   <Phone className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-500" />
                   <input
@@ -1545,7 +1555,7 @@ export default function App() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Passphrase Security Key</label>
+                <label className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Password</label>
                 <div className="relative">
                   <Lock className="absolute left-3.5 top-3.5 w-4 h-4 text-gray-500" />
                   <input
@@ -1563,7 +1573,7 @@ export default function App() {
                 type="submit"
                 className="w-full py-3 bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl text-xs font-bold cursor-pointer transition-all uppercase tracking-wider shadow-lg shadow-indigo-650/15"
               >
-                Register & Initialize DB
+                Sign Up
               </button>
 
               <div className="relative my-4 flex items-center justify-center">
@@ -1578,18 +1588,20 @@ export default function App() {
                 onClick={handleGoogleLogin}
                 className="w-full py-2.5 bg-white/5 hover:bg-white/10 text-white border border-white/5 rounded-xl text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-2"
               >
-                <div className="w-4 h-4 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin-slow shrink-0" />
-                <span>Google SSO Quick Sign Up</span>
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                  <path fill="#currentColor" d="M12.24 10.285V13.4h6.887c-.275 1.565-1.88 4.604-6.887 4.604-4.33 0-7.859-3.578-7.859-8s3.53-8 7.859-8c2.46 0 4.105 1.025 5.047 1.926l2.427-2.334C18.155 2.113 15.44 1 12.24 1 6.033 1 12.24s5.033 11.24 11.24 11.24c6.478 0 10.793-4.537 10.793-10.986 0-.745-.08-1.31-.176-1.879H12.24z"/>
+                </svg>
+                <span>Continue with Google</span>
               </button>
 
               <div className="text-center pt-2">
-                <span className="text-xs text-gray-400">Already registered? </span>
+                <span className="text-xs text-gray-400">Already have an account? </span>
                 <button type="button" onClick={() => setAuthMode('signin')} className="text-xs text-indigo-400 font-bold hover:underline">Log In</button>
               </div>
             </form>
           ) : (
             <div className="space-y-4">
-              <span className="text-xs text-gray-300 block leading-relaxed text-center">To reset your account passphrase, submit your verified business email below. A secure Supabase auth reset token link will be dispatched automatically.</span>
+              <span className="text-xs text-gray-300 block leading-relaxed text-center">Enter your email address below to reset your password. We will send you a password reset link.</span>
               <input
                 type="email"
                 placeholder="merchant@kasi.za"
@@ -1601,7 +1613,7 @@ export default function App() {
                 onClick={handlePasswordReset}
                 className="w-full py-2.5 bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl text-xs font-bold font-sans uppercase tracking-wider"
               >
-                Send Recovery link
+                Send Reset Link
               </button>
               <button onClick={() => setAuthMode('signin')} className="w-full text-xs text-gray-450 hover:underline">Return to Login</button>
             </div>
@@ -1830,18 +1842,18 @@ export default function App() {
             
             {(['dashboard', 'pos', 'inventory', 'suppliers', 'loyalty', 'expenses', 'documents', 'community', 'employees', 'ai', 'subscription', 'saas_config'] as const).map(tab => {
               const labels = {
-                dashboard: { text: 'Analytical Rhythms', icon: BarChart3 },
-                pos: { text: 'Cash Cashier POS', icon: ShoppingCart },
-                inventory: { text: 'Inventory Stock Catalog', icon: Package },
-                suppliers: { text: 'Suppliers Depot Marketplace', icon: Truck },
-                loyalty: { text: 'Kasi Loyalty Program', icon: Award },
-                expenses: { text: 'Operations Bookkeeping', icon: BookOpen },
-                documents: { text: 'Invoices & Receipts', icon: FileText },
-                community: { text: 'Township Trade Exchange', icon: Compass },
-                employees: { text: 'Shift Cashiers', icon: Users },
-                ai: { text: 'AI Business Commander', icon: Sparkles },
-                subscription: { text: 'SaaS Subscription Tier', icon: CreditCard },
-                saas_config: { text: 'Database & SQL Integration', icon: Key }
+                dashboard: { text: 'Dashboard', icon: BarChart3 },
+                pos: { text: 'POS System', icon: ShoppingCart },
+                inventory: { text: 'Inventory Catalog', icon: Package },
+                suppliers: { text: 'Supplier Directory', icon: Truck },
+                loyalty: { text: 'Loyalty Program', icon: Award },
+                expenses: { text: 'Expense Tracker', icon: BookOpen },
+                documents: { text: 'Invoices & Documents', icon: FileText },
+                community: { text: 'Community Exchange', icon: Compass },
+                employees: { text: 'Employees', icon: Users },
+                ai: { text: 'Business Assistant', icon: Sparkles },
+                subscription: { text: 'Subscription', icon: CreditCard },
+                saas_config: { text: 'Database Settings', icon: Key }
               };
               const meta = labels[tab];
               const IconComp = meta.icon;
@@ -2009,10 +2021,10 @@ export default function App() {
       <footer className="bg-[#141416] border-t border-white/5 px-6 py-2 flex flex-col md:flex-row justify-between items-center text-[10px] text-gray-500 font-mono gap-1 select-all relative z-40">
         <span className="flex items-center gap-1">
           <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
-          <span>Tenant Action audit:</span>
-          <span className="text-gray-300 font-bold">{auditLogs[0] ? auditLogs[0].details : 'Active listening on port 3000'}</span>
+          <span>Activity Log:</span>
+          <span className="text-gray-300 font-bold">{auditLogs[0] ? auditLogs[0].details : 'Connected'}</span>
         </span>
-        <span className="hidden md:inline">SpazaFlow-AI Cloud Platform v1.45 • RLS Enforcement Mode</span>
+        <span className="hidden md:inline">SpazaFlow Platform v1.45</span>
       </footer>
 
     </div>

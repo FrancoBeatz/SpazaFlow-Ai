@@ -1,6 +1,6 @@
 {
-  "name": "SpazaFlow AI",
-  "description": "Production-grade multi-tenant SaaS for South African township tuck shops (spazas). High-fidelity POS, isolated databases, active inventory tracing, and Gemini AI companion integration.",
+  "name": "SpazaFlow",
+  "description": "Multi-tenant platform for South African township tuck shops (spazas). Complete POS, inventory management, supplier directory, and business analytics.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
