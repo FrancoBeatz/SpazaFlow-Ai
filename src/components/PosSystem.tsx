@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Search, ShoppingCart, User, Ticket, HelpCircle, Check, Printer, Share2, CornerDownRight, Scan, RotateCcw } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Search, ShoppingCart, User, Ticket, HelpCircle, Check, Printer, Share2, CornerDownRight, Scan, RotateCcw, Keyboard, Power } from 'lucide-react';
 import { Product, Sale, CustomerLoyalty } from '../types';
 
 interface PosSystemProps {
@@ -22,6 +22,14 @@ export default function PosSystem({ products, loyalty, onSaleComplete, currency 
   const [completedSaleSlip, setCompletedSaleSlip] = useState<Sale | null>(null);
   const [showReceiptModal, setShowReceiptModal] = useState(false);
   const [scannerActive, setScannerActive] = useState(false);
+
+  // Cashier tools state
+  const [recentScans, setRecentScans] = useState<Product[]>([]);
+  const [scannerEnabled, setScannerEnabled] = useState(true);
+  const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
+
+  // Barcode input reference for focus recovery
+  const barcodeInputRef = useRef<HTMLInputElement>(null);
   
   // Quick cash keys for tender panel
   const quickCashAmounts = [10, 20, 50, 100, 200];
@@ -35,13 +43,46 @@ export default function PosSystem({ products, loyalty, onSaleComplete, currency 
     return matchesSearch && matchesCategory;
   });
 
+  // Sound player helper for POS success events
+  const playSuccessBeep = () => {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+
+      // Subtle, unobtrusive high-frequency sine-wave beep
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(1400, audioCtx.currentTime); // Professional 1400Hz frequency
+
+      // Short decay ramp-out
+      gainNode.gain.setValueAtTime(0.08, audioCtx.currentTime); // Soft, non-piercing volume
+      gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.12); // Short 120ms beep
+
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.12);
+    } catch (err) {
+      console.warn("AudioContext playback was blocked or is not supported by this browser.", err);
+    }
+  };
+
   // Emulating Barcode Scanner
   const handleBarcodeSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!barcodeInput) return;
     const found = products.find(p => p.barcode === barcodeInput || p.id === barcodeInput);
     if (found) {
-      addToCart(found);
+      playSuccessBeep(); // Play success beep specifically for barcode scan
+      addToCart(found, true); // Prevent duplicate beep in addToCart
+      
+      // Update recent scans list (maintain last 5 unique scanned products)
+      setRecentScans(prev => {
+        const filtered = prev.filter(p => p.id !== found.id);
+        return [found, ...filtered].slice(0, 5);
+      });
+
       setBarcodeInput('');
       // Flash success trigger
       setScannerActive(true);
@@ -50,10 +91,15 @@ export default function PosSystem({ products, loyalty, onSaleComplete, currency 
       alert(`Barcode ${barcodeInput} not recognized. Try typing standard: 5449000000996 (Coke) or 6002233445566 (Bread)`);
       setBarcodeInput('');
     }
+
+    // Automatically regain focus after every scan operation
+    setTimeout(() => {
+      barcodeInputRef.current?.focus();
+    }, 50);
   };
 
   // Add Item to checkout cart
-  const addToCart = (product: Product) => {
+  const addToCart = (product: Product, skipBeep = false) => {
     if (product.stock === 0) {
       alert(`Stock warning: ${product.name} is depleted! Sell with caution.`);
     }
@@ -62,6 +108,9 @@ export default function PosSystem({ products, loyalty, onSaleComplete, currency 
       setCart(cart.map(item => item.product.id === product.id ? { ...item, quantity: item.quantity + 1 } : item));
     } else {
       setCart([...cart, { product, quantity: 1 }]);
+    }
+    if (!skipBeep) {
+      playSuccessBeep();
     }
   };
 
@@ -183,8 +232,109 @@ export default function PosSystem({ products, loyalty, onSaleComplete, currency 
     window.open(`https://api.whatsapp.com/send?phone=${tel}&text=${body}`, '_blank');
   };
 
+  // Keyboard shortcuts event listener with stable ref to latest values
+  const checkoutStateRef = useRef({ cart, paymentMethod, cashPaidAmount, finalTotal, handleCheckoutSubmit });
+  useEffect(() => {
+    checkoutStateRef.current = { cart, paymentMethod, cashPaidAmount, finalTotal, handleCheckoutSubmit };
+  }, [cart, paymentMethod, cashPaidAmount, finalTotal, handleCheckoutSubmit]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F1') {
+        e.preventDefault();
+        setShowKeyboardHelp(prev => !prev);
+      } else if (e.key === 'F2') {
+        e.preventDefault();
+        checkoutStateRef.current.handleCheckoutSubmit();
+      } else if (e.key === 'Escape') {
+        if (showReceiptModal) {
+          setShowReceiptModal(false);
+        } else {
+          setCart([]);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showReceiptModal]);
+
+  // Autofocus barcode input when scanner is toggled ON or component mounts
+  useEffect(() => {
+    if (scannerEnabled) {
+      setTimeout(() => {
+        barcodeInputRef.current?.focus();
+      }, 100);
+    }
+  }, [scannerEnabled]);
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6" id="pos_module">
+      
+      {/* Sleek POS Counter Header Row */}
+      <div className="col-span-12 bg-[#141416] p-4 rounded-2xl border border-white/5 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
+            <Scan className="w-5 h-5 text-indigo-400" />
+          </div>
+          <div>
+            <h2 className="font-extrabold text-sm text-white font-sans uppercase tracking-wider">Spaza Terminal POS Counter</h2>
+            <p className="text-[10px] text-gray-400 font-sans">Keep barcode focused for rapid continuous transactions</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          {/* Help Tooltip Trigger / Keyboard Shortcut Info Indicator */}
+          <div className="relative group">
+            <button
+              onClick={() => setShowKeyboardHelp(prev => !prev)}
+              type="button"
+              className="px-3 py-2 rounded-xl text-xs font-bold bg-white/5 hover:bg-white/10 text-gray-300 border border-white/5 transition-all flex items-center gap-1.5 cursor-pointer"
+              title="View Keyboard Shortcuts (F1)"
+            >
+              <HelpCircle className="w-4 h-4 text-indigo-400" />
+              <span>Shortcuts Help (F1)</span>
+            </button>
+
+            {/* Hover Tooltip / Popover panel */}
+            <div className={`absolute right-0 top-full mt-2 w-64 p-3.5 bg-[#141416] border border-white/10 rounded-xl shadow-xl z-30 transition-all space-y-2 ${showKeyboardHelp ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'}`}>
+              <h5 className="font-bold text-xs text-indigo-400 border-b border-white/15 pb-1 flex items-center gap-1.5">
+                <HelpCircle className="w-3.5 h-3.5" />
+                <span className="font-sans">Cashier Keyboard Shortcuts</span>
+              </h5>
+              <ul className="space-y-1.5 text-[10px] text-gray-300 font-mono">
+                <li className="flex justify-between">
+                  <span className="font-bold text-white bg-white/10 px-1 py-0.2 rounded">F1</span>
+                  <span>Toggle Shortcuts Help</span>
+                </li>
+                <li className="flex justify-between">
+                  <span className="font-bold text-white bg-white/10 px-1 py-0.2 rounded">F2</span>
+                  <span>Instant Process Checkout</span>
+                </li>
+                <li className="flex justify-between">
+                  <span className="font-bold text-white bg-white/10 px-1 py-0.2 rounded">Escape</span>
+                  <span>Clear Cart / Back to POS</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          {/* Dedicated Barcode Scanner Mode Toggle button */}
+          <button
+            onClick={() => setScannerEnabled(!scannerEnabled)}
+            type="button"
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+              scannerEnabled
+                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20'
+                : 'bg-rose-500/10 text-rose-450 border border-rose-500/20 hover:bg-rose-500/20'
+            }`}
+          >
+            <span className={`w-2 h-2 rounded-full ${scannerEnabled ? 'bg-emerald-400 animate-ping' : 'bg-rose-500'}`} />
+            <span className="font-sans">{scannerEnabled ? 'Scanner Mode: ON' : 'Scanner Mode: OFF (Manual)'}</span>
+          </button>
+        </div>
+      </div>
       
       {/* LEFT COLUMN: Products selector (cols 7) */}
       <div className="lg:col-span-7 space-y-4">
@@ -205,27 +355,63 @@ export default function PosSystem({ products, loyalty, onSaleComplete, currency 
             </div>
 
             {/* Barcode Form emulation */}
-            <form onSubmit={handleBarcodeSubmit} className="relative w-full sm:w-64">
-              <input
-                type="text"
-                placeholder="Scan / Type Barcode..."
-                value={barcodeInput}
-                onChange={(e) => setBarcodeInput(e.target.value)}
-                className={`w-full pl-9 pr-16 py-2.5 rounded-xl bg-slate-50 border outline-none text-sm transition-all ${
-                  scannerActive 
-                    ? 'border-emerald-500 bg-emerald-500/15 ring-2 ring-emerald-500/20 text-white font-mono' 
-                    : 'border-white/10 focus:border-indigo-500 bg-[#0A0A0B] text-white font-mono placeholder-gray-500'
-                }`}
-              />
-              <Scan className="absolute left-3 top-3 w-4 h-4 text-gray-500" />
-              <button 
-                type="submit"
-                className="absolute right-1.5 top-1.5 px-2.5 py-1 text-[10px] uppercase font-bold tracking-wider rounded-lg bg-white/10 hover:bg-indigo-650 hover:text-white text-gray-300 transition-colors"
-              >
-                Scan
-              </button>
-            </form>
+            {scannerEnabled ? (
+              <form onSubmit={handleBarcodeSubmit} className="relative w-full sm:w-64">
+                <input
+                  ref={barcodeInputRef}
+                  type="text"
+                  placeholder="Scan / Type Barcode..."
+                  value={barcodeInput}
+                  onChange={(e) => setBarcodeInput(e.target.value)}
+                  className={`w-full pl-9 pr-16 py-2.5 rounded-xl bg-slate-50 border outline-none text-sm transition-all ${
+                    scannerActive 
+                      ? 'border-emerald-500 bg-emerald-500/15 ring-2 ring-emerald-500/20 text-white font-mono' 
+                      : 'border-white/10 focus:border-indigo-500 bg-[#0A0A0B] text-white font-mono placeholder-gray-500'
+                  }`}
+                />
+                <Scan className="absolute left-3 top-3 w-4 h-4 text-gray-500" />
+                <button 
+                  type="submit"
+                  className="absolute right-1.5 top-1.5 px-2.5 py-1 text-[10px] uppercase font-bold tracking-wider rounded-lg bg-white/10 hover:bg-indigo-650 hover:text-white text-gray-300 transition-colors"
+                >
+                  Scan
+                </button>
+              </form>
+            ) : (
+              <div className="flex items-center justify-center px-4 py-2 bg-[#0A0A0B] text-amber-500 border border-amber-500/10 rounded-xl text-xs font-semibold gap-1.5 w-full sm:w-64 font-mono select-none">
+                <Power className="w-3.5 h-3.5 text-amber-550" />
+                <span>Manual Search Active</span>
+              </div>
+            )}
           </div>
+
+          {/* Last 5 Scanned Barcodes Quick Bar */}
+          {recentScans.length > 0 && (
+            <div className="pt-2.5 border-t border-white/5 space-y-1.5 animate-in fade-in duration-300">
+              <span className="text-[10px] font-mono uppercase text-gray-500 tracking-wider block">
+                Last Scanned Items (Click to Quick Re-add):
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {recentScans.map(item => (
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      playSuccessBeep();
+                      addToCart(item, true);
+                    }}
+                    type="button"
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-500/5 hover:bg-indigo-500/15 border border-indigo-500/10 hover:border-indigo-500/30 text-indigo-300 text-[10px] font-bold transition-all cursor-pointer"
+                  >
+                    <span className="text-[9px] font-mono text-indigo-400 bg-indigo-500/10 px-1 py-0.2 rounded">
+                      {item.barcode || 'N/A'}
+                    </span>
+                    <span className="max-w-[100px] truncate font-sans">{item.name}</span>
+                    <span className="text-gray-400 font-mono">R{item.sellingPrice.toFixed(0)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Categories track */}
           <div className="flex gap-1.5 overflow-x-auto pb-1 shrink-0">
@@ -600,10 +786,10 @@ export default function PosSystem({ products, loyalty, onSaleComplete, currency 
             <div className="grid grid-cols-2 gap-2 border-t border-white/10 pt-3">
               <button
                 onClick={triggerPrintReceipt}
-                className="py-2.5 text-xs font-bold bg-white/10 hover:bg-white/20 text-white rounded-xl transition-all flex items-center justify-center gap-1.5 border border-white/10"
+                className="py-2.5 text-xs font-bold bg-white/10 hover:bg-white/20 text-white rounded-xl transition-all flex items-center justify-center gap-1.5 border border-white/10 cursor-pointer"
               >
                 <Printer className="w-3.5 h-3.5" />
-                <span>Simulate Print</span>
+                <span>Print Receipt</span>
               </button>
               <button
                 onClick={handleWhatsAppSend}
@@ -614,11 +800,86 @@ export default function PosSystem({ products, loyalty, onSaleComplete, currency 
               </button>
               <button
                 onClick={() => setShowReceiptModal(false)}
-                className="col-span-2 py-2 text-xs font-bold bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl transition-all"
+                className="col-span-2 py-2 text-xs font-bold bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl transition-all cursor-pointer"
               >
                 Back to POS Counter
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* OFF-SCREEN THERMAL RECEIPT CONTAINER (VISIBLE ONLY DURING PRINT) */}
+      {completedSaleSlip && (
+        <div className="hidden print:block thermal-receipt-print-container font-mono text-black">
+          <div className="text-center space-y-1 mb-4">
+            <h4 className="font-bold text-sm uppercase tracking-wide">SIZWE KASI TUCK SHOP</h4>
+            <p className="text-[10px]">Khayelitsha Road, Orlando East, Soweto</p>
+            <p className="text-[9px]">VAT Reg: 4920239414 | Tel: +27 11 933 1243</p>
+            <p className="text-[9px] font-bold">TAX INVOICE | Receipt ID: {completedSaleSlip.id}</p>
+          </div>
+
+          <div className="border-b border-dashed border-black pb-2 mb-2 text-[10px] flex justify-between">
+            <span>Date: {new Date(completedSaleSlip.timestamp).toLocaleString('en-ZA')}</span>
+            <span>Cashier: Sipho</span>
+          </div>
+
+          <div className="border-b border-dashed border-black pb-2 mb-2 text-[10px] space-y-1">
+            <div className="flex justify-between font-bold border-b border-black pb-1 mb-1">
+              <span>Item Description</span>
+              <span>Total</span>
+            </div>
+            {completedSaleSlip.items.map((item, index) => (
+              <div key={index} className="flex justify-between">
+                <div>
+                  <span className="font-bold block">{item.productName}</span>
+                  <span className="text-gray-600">x{item.quantity} @ R{item.price.toFixed(2)}</span>
+                </div>
+                <span className="font-bold">R{item.total.toFixed(2)}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="border-b border-dashed border-black pb-2 mb-2 text-[10px] space-y-1">
+            <div className="flex justify-between">
+              <span>Net (Excl. VAT):</span>
+              <span>R{completedSaleSlip.subtotal.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>S.A. VAT (15% incl):</span>
+              <span>R{completedSaleSlip.vat.toFixed(2)}</span>
+            </div>
+            {completedSaleSlip.pointsEarned ? (
+              <div className="flex justify-between font-bold text-indigo-900 text-[9px]">
+                <span>Member Loyalty Points:</span>
+                <span>+{completedSaleSlip.pointsEarned} Points</span>
+              </div>
+            ) : null}
+            <div className="flex justify-between font-bold text-xs pt-1.5 border-t border-dashed border-black">
+              <span>TOTAL TAX INVOICE:</span>
+              <span>R{completedSaleSlip.total.toFixed(2)}</span>
+            </div>
+          </div>
+
+          <div className="border-b border-dashed border-black pb-2 mb-2 text-[10px] space-y-1">
+            <div className="flex justify-between">
+              <span>Payment Protocol:</span>
+              <span className="font-bold uppercase">{completedSaleSlip.paymentMethod}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Amount Tendered:</span>
+              <span>R{completedSaleSlip.paidAmount.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between font-bold">
+              <span>Change Refunded:</span>
+              <span>R{completedSaleSlip.changeAmount.toFixed(2)}</span>
+            </div>
+          </div>
+
+          <div className="text-center text-[10px] mt-4 space-y-1 pt-1">
+            <p className="font-bold">Nceda uphathe i-loyalty card yakho.</p>
+            <p>*** Thank you! Enkosi! Sharp-sharp! ***</p>
+            <p className="text-[8px] text-gray-550">Powered by SpazaFlow AI Core</p>
           </div>
         </div>
       )}

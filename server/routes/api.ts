@@ -889,6 +889,77 @@ router.post('/products', authMiddleware, async (req: AuthRequest, res: Response)
   }
 });
 
+// BULK UPDATE PRODUCT PRICES
+router.put('/products/bulk-update', authMiddleware, async (req: AuthRequest, res: Response) => {
+  const { updates } = req.body;
+  if (!Array.isArray(updates) || updates.length === 0) {
+    return res.status(400).json({ success: false, message: 'Invalid or empty updates array' });
+  }
+
+  const businessId = req.user?.businessId;
+  if (!businessId) {
+    return res.status(401).json({ success: false, message: 'Unauthorized' });
+  }
+
+  // Validate values
+  for (const item of updates) {
+    if (!item.id || typeof item.costPrice !== 'number' || typeof item.sellingPrice !== 'number') {
+      return res.status(400).json({ success: false, message: 'Each update must include an id, and numerical costPrice and sellingPrice' });
+    }
+    if (item.costPrice < 0 || item.sellingPrice < 0) {
+      return res.status(400).json({ success: false, message: 'Prices must be non-negative values' });
+    }
+  }
+
+  try {
+    // Format updates to match database columns for SQL / RPC
+    const formattedUpdates = updates.map(u => ({
+      id: u.id,
+      cost_price: u.costPrice,
+      selling_price: u.sellingPrice
+    }));
+
+    // Attempt the transactional RPC first
+    const { data: rpcData, error: rpcError } = await supabase.rpc('bulk_update_product_prices', {
+      updates_json: formattedUpdates,
+      biz_id: businessId
+    });
+
+    if (!rpcError && rpcData) {
+      const results = rpcData.map((row: any) => fromProductRow(row));
+      return res.json({ success: true, message: 'Successfully updated products in bulk via Postgres Transaction', data: results });
+    }
+
+    // Fallback: If RPC is not available or fails, run them in a loop
+    console.warn("RPC bulk_update_product_prices failed or not found, falling back to manual loop:", rpcError?.message);
+
+    const results = [];
+    for (const update of updates) {
+      const { data, error } = await supabase
+        .from('products')
+        .update({
+          cost_price: update.costPrice,
+          selling_price: update.sellingPrice
+        })
+        .eq('business_id', businessId)
+        .eq('id', update.id)
+        .select()
+        .maybeSingle();
+
+      if (error) {
+        throw new Error(`Failed to update product ${update.id}: ${error.message}`);
+      }
+      if (data) {
+        results.push(fromProductRow(data));
+      }
+    }
+
+    res.json({ success: true, message: 'Successfully updated products in bulk', data: results });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 router.put('/products/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const businessId = req.user?.businessId;

@@ -100,6 +100,13 @@ export async function apiUpdateProduct(id: string, product: Partial<Product>) {
   });
 }
 
+export async function apiBulkUpdateProductPrices(updates: { id: string; costPrice: number; sellingPrice: number }[]) {
+  return apiFetch<Product[]>('/products/bulk-update', {
+    method: 'PUT',
+    body: JSON.stringify({ updates }),
+  });
+}
+
 export async function apiDeleteProduct(id: string) {
   return apiFetch<any>(`/products/${id}`, {
     method: 'DELETE',

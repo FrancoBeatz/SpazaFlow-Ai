@@ -233,3 +233,22 @@ CREATE POLICY allow_all_purchase_orders ON public.purchase_orders FOR ALL USING 
 CREATE POLICY allow_all_notifications ON public.notifications FOR ALL USING (true);
 CREATE POLICY allow_all_activity_logs ON public.activity_logs FOR ALL USING (true);
 CREATE POLICY allow_all_community_marketplace ON public.community_marketplace FOR ALL USING (true);
+
+
+-- 19. DATABASE FUNCTION FOR TRANSACTIONAL BULK UPDATE
+CREATE OR REPLACE FUNCTION public.bulk_update_product_prices(updates_json jsonb, biz_id text)
+RETURNS SETOF public.products AS $$
+DECLARE
+  update_record record;
+BEGIN
+  FOR update_record IN SELECT * FROM jsonb_to_recordset(updates_json) AS x(id text, cost_price numeric, selling_price numeric) LOOP
+    UPDATE public.products
+    SET cost_price = update_record.cost_price,
+        selling_price = update_record.selling_price
+    WHERE id = update_record.id AND business_id = biz_id;
+  END LOOP;
+  
+  RETURN QUERY SELECT * FROM public.products WHERE business_id = biz_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+

@@ -45,6 +45,135 @@ export default function DocumentsView({ sales, supplierOrders, products, currenc
     alert("Exporting Document PDF file... Download successfully queued in background.");
   };
 
+  const handleExportCSV = (type: 'current' | 'all-sales' | 'all-inventory' | 'all-pos') => {
+    let csvContent = "\uFEFF"; // UTF-8 BOM
+    let filename = "";
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const bizName = "Sizwe_Kasi_Tuck_Shop";
+
+    if (type === 'current') {
+      filename = `${bizName}_${activeDocType.toUpperCase()}_${timestamp}.csv`;
+      csvContent += "Item No,Product Label,Unit Price (ZAR),Quantity,Sum Total (ZAR)\n";
+
+      if (activeDocType === 'invoice' && selectedSale) {
+        selectedSale.items.forEach((item, index) => {
+          const row = [
+            index + 1,
+            `"${item.productName.replace(/"/g, '""')}"`,
+            item.price.toFixed(2),
+            item.quantity,
+            item.total.toFixed(2)
+          ].join(",");
+          csvContent += row + "\n";
+        });
+      } else if (activeDocType === 'po' && selectedPo) {
+        selectedPo.items.forEach((item, index) => {
+          const row = [
+            index + 1,
+            `"${item.name.replace(/"/g, '""')}"`,
+            item.price.toFixed(2),
+            item.quantity,
+            (item.price * item.quantity).toFixed(2)
+          ].join(",");
+          csvContent += row + "\n";
+        });
+      } else if (activeDocType === 'quote') {
+        quoteItems.forEach((item, index) => {
+          const row = [
+            index + 1,
+            `"${item.product.name.replace(/"/g, '""')}"`,
+            item.product.sellingPrice.toFixed(2),
+            item.qty,
+            (item.product.sellingPrice * item.qty).toFixed(2)
+          ].join(",");
+          csvContent += row + "\n";
+        });
+      } else if (activeDocType === 'delivery' && selectedSale) {
+        selectedSale.items.forEach((item, index) => {
+          const row = [
+            index + 1,
+            `"${item.productName.replace(/"/g, '""')}"`,
+            item.price.toFixed(2),
+            item.quantity,
+            item.total.toFixed(2)
+          ].join(",");
+          csvContent += row + "\n";
+        });
+      }
+    } else if (type === 'all-sales') {
+      filename = `${bizName}_ALL_SALES_INVOICES_${timestamp}.csv`;
+      csvContent += "Sale ID,Date,Customer Phone,Payment Method,Subtotal (ZAR),VAT Tax (ZAR),Total Amount (ZAR),Items Count\n";
+
+      sales.forEach(s => {
+        const row = [
+          `"${s.id}"`,
+          `"${new Date(s.timestamp || Date.now()).toLocaleDateString()}"`,
+          `"${(s.customerPhone || 'Walk-in').replace(/"/g, '""')}"`,
+          `"${s.paymentMethod}"`,
+          s.subtotal.toFixed(2),
+          s.vat.toFixed(2),
+          s.total.toFixed(2),
+          s.items.length
+        ].join(",");
+        csvContent += row + "\n";
+      });
+    } else if (type === 'all-inventory') {
+      filename = `${bizName}_ALL_INVENTORY_${timestamp}.csv`;
+      csvContent += "Product ID,Barcode,Product Name,Category,Stock Level,Min Stock,Supplier Cost (ZAR),Selling Retail (ZAR),Profit Margin (%)\n";
+
+      products.forEach(p => {
+        const margin = p.sellingPrice > 0 ? (((p.sellingPrice - p.costPrice) / p.sellingPrice) * 100).toFixed(1) : "0.0";
+        const row = [
+          `"${p.id}"`,
+          `"${(p.barcode || '').replace(/"/g, '""')}"`,
+          `"${p.name.replace(/"/g, '""')}"`,
+          `"${p.category}"`,
+          p.stock,
+          p.minStock,
+          p.costPrice.toFixed(2),
+          p.sellingPrice.toFixed(2),
+          margin
+        ].join(",");
+        csvContent += row + "\n";
+      });
+    } else if (type === 'all-pos') {
+      filename = `${bizName}_ALL_PURCHASE_ORDERS_${timestamp}.csv`;
+      csvContent += "PO ID,Supplier Name,Status,Total Cost (ZAR),Items Count,Created At\n";
+
+      supplierOrders.forEach(o => {
+        const row = [
+          `"${o.id}"`,
+          `"${o.supplierName.replace(/"/g, '""')}"`,
+          `"${o.status}"`,
+          o.total.toFixed(2),
+          o.items.length,
+          `"${new Date(o.timestamp || Date.now()).toLocaleDateString()}"`
+        ].join(",");
+        csvContent += row + "\n";
+      });
+    }
+
+    const lines = csvContent.split("\n");
+    if (lines.length <= 2 && lines[1] === "") {
+      alert("No data is available to export currently!");
+      return;
+    }
+
+    try {
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", filename);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err: any) {
+      alert("Failed to export CSV: " + err.message);
+    }
+  };
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 text-white font-sans" id="documents_module">
       
@@ -342,21 +471,63 @@ export default function DocumentsView({ sales, supplierOrders, products, currenc
         </div>
 
         {/* Action sheet buttons */}
-        <div className="grid grid-cols-2 gap-3 mt-4 pt-4 border-t border-white/5">
-          <button
-            onClick={handlePrint}
-            className="py-2.5 text-xs font-bold bg-[#0A0A0B] hover:bg-white/5 text-gray-200 rounded-xl transition-all flex items-center justify-center gap-1.5 border border-white/10 cursor-pointer"
-          >
-            <Printer className="w-3.5 h-3.5" />
-            <span>Print Sheet (window.print)</span>
-          </button>
-          <button
-            onClick={handleExportSimulated}
-            className="py-2.5 text-xs font-bold bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-md cursor-pointer pointer-events-auto"
-          >
-            <Download className="w-3.5 h-3.5 font-bold" />
-            <span>Simulate PDF Download</span>
-          </button>
+        <div className="space-y-3 mt-4 pt-4 border-t border-white/5">
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={handlePrint}
+              className="py-2.5 text-xs font-bold bg-[#0A0A0B] hover:bg-white/5 text-gray-200 rounded-xl transition-all flex items-center justify-center gap-1.5 border border-white/10 cursor-pointer"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>Print Sheet (window.print)</span>
+            </button>
+            <button
+              onClick={handleExportSimulated}
+              className="py-2.5 text-xs font-bold bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-md cursor-pointer pointer-events-auto"
+            >
+              <Download className="w-3.5 h-3.5 font-bold" />
+              <span>Simulate PDF Download</span>
+            </button>
+          </div>
+
+          <div className="border-t border-white/5 pt-3 space-y-2">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-indigo-400 font-semibold block">
+              📊 Export Ledger Datasets to CSV
+            </span>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <button
+                onClick={() => handleExportCSV('current')}
+                className="py-2 px-2 text-[10px] font-bold bg-emerald-500/10 hover:bg-emerald-500/15 border border-emerald-500/15 hover:border-emerald-500/30 text-emerald-400 rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer"
+                title="Export current document items"
+              >
+                <Download className="w-3 h-3" />
+                <span>Doc Items CSV</span>
+              </button>
+              <button
+                onClick={() => handleExportCSV('all-sales')}
+                className="py-2 px-2 text-[10px] font-bold bg-emerald-500/10 hover:bg-emerald-500/15 border border-emerald-500/15 hover:border-emerald-500/30 text-emerald-400 rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer"
+                title="Export all sales invoices"
+              >
+                <Download className="w-3 h-3" />
+                <span>Sales CSV</span>
+              </button>
+              <button
+                onClick={() => handleExportCSV('all-inventory')}
+                className="py-2 px-2 text-[10px] font-bold bg-emerald-500/10 hover:bg-emerald-500/15 border border-emerald-500/15 hover:border-emerald-500/30 text-emerald-400 rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer"
+                title="Export all inventory products"
+              >
+                <Download className="w-3 h-3" />
+                <span>Inventory CSV</span>
+              </button>
+              <button
+                onClick={() => handleExportCSV('all-pos')}
+                className="py-2 px-2 text-[10px] font-bold bg-emerald-500/10 hover:bg-emerald-500/15 border border-emerald-500/15 hover:border-emerald-500/30 text-emerald-400 rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer"
+                title="Export all supplier purchase orders"
+              >
+                <Download className="w-3 h-3" />
+                <span>POs CSV</span>
+              </button>
+            </div>
+          </div>
         </div>
 
       </div>

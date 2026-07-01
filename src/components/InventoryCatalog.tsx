@@ -6,13 +6,45 @@ interface InventoryCatalogProps {
   products: Product[];
   onSaveProduct: (p: Partial<Product>) => Promise<void>;
   onDeleteProduct: (id: string) => Promise<void>;
+  onBulkUpdatePrices?: (updates: { id: string; costPrice: number; sellingPrice: number }[]) => Promise<void>;
 }
 
-export default function InventoryCatalog({ products, onSaveProduct, onDeleteProduct }: InventoryCatalogProps) {
+export default function InventoryCatalog({ products, onSaveProduct, onDeleteProduct, onBulkUpdatePrices }: InventoryCatalogProps) {
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showBarcodePreview, setShowBarcodePreview] = useState<string | null>(null);
+
+  // Bulk price edit states
+  const [isBulkEditMode, setIsBulkEditMode] = useState(false);
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [bulkCostPrices, setBulkCostPrices] = useState<Record<string, string>>({});
+  const [bulkSellingPrices, setBulkSellingPrices] = useState<Record<string, string>>({});
+  const [isSavingBulk, setIsSavingBulk] = useState(false);
+  const [uniformCost, setUniformCost] = useState('');
+  const [uniformSelling, setUniformSelling] = useState('');
+
+  const handleApplyUniformPrices = () => {
+    if (selectedProductIds.length === 0) {
+      alert("Please check at least one product first on the left column checkbox!");
+      return;
+    }
+    
+    const updatedCosts = { ...bulkCostPrices };
+    const updatedSells = { ...bulkSellingPrices };
+
+    selectedProductIds.forEach(id => {
+      if (uniformCost !== '') {
+        updatedCosts[id] = uniformCost;
+      }
+      if (uniformSelling !== '') {
+        updatedSells[id] = uniformSelling;
+      }
+    });
+
+    setBulkCostPrices(updatedCosts);
+    setBulkSellingPrices(updatedSells);
+  };
 
   // New products fields state
   const [name, setName] = useState('');
@@ -115,6 +147,54 @@ export default function InventoryCatalog({ products, onSaveProduct, onDeleteProd
     setEditingProduct(null);
   };
 
+  const handleSaveBulkChanges = async () => {
+    if (selectedProductIds.length === 0) return;
+    if (!onBulkUpdatePrices) return;
+
+    // Build the updates array
+    const updates: { id: string; costPrice: number; sellingPrice: number }[] = [];
+
+    for (const id of selectedProductIds) {
+      const prod = products.find(p => p.id === id);
+      if (!prod) continue;
+
+      const costInput = bulkCostPrices[id] !== undefined ? bulkCostPrices[id] : prod.costPrice.toString();
+      const sellInput = bulkSellingPrices[id] !== undefined ? bulkSellingPrices[id] : prod.sellingPrice.toString();
+
+      const costVal = parseFloat(costInput);
+      const sellVal = parseFloat(sellInput);
+
+      if (isNaN(costVal) || isNaN(sellVal)) {
+        alert(`Invalid prices specified for product: ${prod.name}. Please enter valid numbers.`);
+        return;
+      }
+
+      if (costVal < 0 || sellVal < 0) {
+        alert(`Prices for product "${prod.name}" cannot be negative!`);
+        return;
+      }
+
+      updates.push({
+        id,
+        costPrice: costVal,
+        sellingPrice: sellVal
+      });
+    }
+
+    setIsSavingBulk(true);
+    try {
+      await onBulkUpdatePrices(updates);
+      setIsBulkEditMode(false);
+      setSelectedProductIds([]);
+      setBulkCostPrices({});
+      setBulkSellingPrices({});
+    } catch (err: any) {
+      alert("Error saving bulk changes: " + err.message);
+    } finally {
+      setIsSavingBulk(false);
+    }
+  };
+
   return (
     <div className="space-y-6" id="inventory_view">
       
@@ -124,14 +204,135 @@ export default function InventoryCatalog({ products, onSaveProduct, onDeleteProd
           <h3 className="font-bold text-lg text-white">Shelf Inventory Catalog</h3>
           <p className="text-xs text-gray-400">Track raw margins, stock levels, and expiry warnings of your items</p>
         </div>
-        <button
-          onClick={() => setShowAddForm(!showAddForm)}
-          className="px-4.5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all flex items-center gap-2"
-        >
-          <PlusCircle className="w-4 h-4" />
-          <span>{showAddForm ? 'Close Intake Form' : 'Register New Item'}</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5">
+          {onBulkUpdatePrices && (
+            <button
+              type="button"
+              onClick={() => {
+                if (isBulkEditMode) {
+                  setIsBulkEditMode(false);
+                  setSelectedProductIds([]);
+                  setBulkCostPrices({});
+                  setBulkSellingPrices({});
+                } else {
+                  setIsBulkEditMode(true);
+                  setSelectedProductIds([]);
+                }
+              }}
+              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+                isBulkEditMode
+                  ? 'bg-amber-600 hover:bg-amber-500 text-white'
+                  : 'bg-white/5 hover:bg-white/10 text-gray-300 border border-white/5'
+              }`}
+            >
+              <Tag className="w-4 h-4" />
+              <span>{isBulkEditMode ? 'Exit Bulk Edit' : 'Bulk Edit Prices'}</span>
+            </button>
+          )}
+          <button
+            onClick={() => setShowAddForm(!showAddForm)}
+            className="px-4.5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all flex items-center gap-2"
+          >
+            <PlusCircle className="w-4 h-4" />
+            <span>{showAddForm ? 'Close Intake Form' : 'Register New Item'}</span>
+          </button>
+        </div>
       </div>
+
+      {/* Bulk edit guide banner */}
+      {isBulkEditMode && (
+        <div className="space-y-3">
+          <div className="bg-amber-500/10 border border-amber-500/20 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="space-y-0.5">
+              <h4 className="font-bold text-sm text-amber-400 flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-amber-500" />
+                <span>Bulk Price Edit Mode Active</span>
+              </h4>
+              <p className="text-xs text-gray-400">
+                Check the items you want to edit on the left, enter their new supplier (cost) and retail (selling) prices directly, then click save.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsBulkEditMode(false);
+                  setSelectedProductIds([]);
+                  setBulkCostPrices({});
+                  setBulkSellingPrices({});
+                  setUniformCost('');
+                  setUniformSelling('');
+                }}
+                className="px-3.5 py-2 text-xs font-semibold text-gray-400 bg-white/5 hover:bg-white/10 rounded-xl transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveBulkChanges}
+                disabled={selectedProductIds.length === 0 || isSavingBulk}
+                className="px-4 py-2 text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+              >
+                {isSavingBulk ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                <span>Save Changes ({selectedProductIds.length})</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Optional Uniform Pricing Multi-Apply Bar */}
+          <div className="bg-[#141416] border border-white/5 p-4 rounded-2xl space-y-3 animate-in fade-in duration-300">
+            <div className="flex items-center gap-1.5 text-xs text-gray-400 font-bold uppercase tracking-wider">
+              <Tag className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Apply Uniform Pricing to Checked ({selectedProductIds.length}) Items</span>
+            </div>
+            <div className="flex flex-wrap items-end gap-3 text-xs">
+              <div className="space-y-1">
+                <span className="block text-gray-400 font-semibold">Uniform Cost Price (R)</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="Set same cost price..."
+                  value={uniformCost}
+                  onChange={(e) => setUniformCost(e.target.value)}
+                  className="px-3 py-1.5 rounded-xl bg-[#0A0A0B] border border-white/10 text-white outline-none w-44 font-mono"
+                />
+              </div>
+              <div className="space-y-1">
+                <span className="block text-gray-400 font-semibold">Uniform Selling Price (R)</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="Set same selling price..."
+                  value={uniformSelling}
+                  onChange={(e) => setUniformSelling(e.target.value)}
+                  className="px-3 py-1.5 rounded-xl bg-[#0A0A0B] border border-white/10 text-white outline-none w-44 font-mono"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleApplyUniformPrices}
+                className="px-4 py-2 bg-indigo-650 hover:bg-indigo-600 hover:text-white text-indigo-200 font-bold rounded-xl transition-all cursor-pointer"
+              >
+                Apply to Checked Items
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setUniformCost('');
+                  setUniformSelling('');
+                }}
+                className="px-3 py-2 text-gray-400 hover:text-white transition-all text-xs cursor-pointer"
+              >
+                Clear fields
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Register New item form */}
       {showAddForm && (
@@ -344,6 +545,22 @@ export default function InventoryCatalog({ products, onSaveProduct, onDeleteProd
           <table className="w-full border-collapse text-left text-xs">
             <thead>
               <tr className="bg-white/5 text-gray-400 font-mono border-b border-white/5">
+                {isBulkEditMode && (
+                  <th className="p-4 w-12 text-center select-none">
+                    <input
+                      type="checkbox"
+                      className="rounded border-white/10 bg-white/5 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                      checked={filteredProducts.length > 0 && selectedProductIds.length === filteredProducts.length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedProductIds(filteredProducts.map(p => p.id));
+                        } else {
+                          setSelectedProductIds([]);
+                        }
+                      }}
+                    />
+                  </th>
+                )}
                 <th className="p-4 uppercase tracking-wider font-semibold">Product Description</th>
                 <th className="p-4 uppercase tracking-wider font-semibold">Category</th>
                 <th className="p-4 uppercase tracking-wider font-semibold">Supplier Price</th>
@@ -358,8 +575,19 @@ export default function InventoryCatalog({ products, onSaveProduct, onDeleteProd
             
             <tbody className="divide-y divide-white/5">
               {filteredProducts.map(p => {
-                const markup = p.sellingPrice - p.costPrice;
-                const marginPct = (markup / p.sellingPrice) * 100;
+                const costVal = isBulkEditMode && selectedProductIds.includes(p.id)
+                  ? parseFloat(bulkCostPrices[p.id] !== undefined ? bulkCostPrices[p.id] : p.costPrice.toString())
+                  : p.costPrice;
+
+                const sellVal = isBulkEditMode && selectedProductIds.includes(p.id)
+                  ? parseFloat(bulkSellingPrices[p.id] !== undefined ? bulkSellingPrices[p.id] : p.sellingPrice.toString())
+                  : p.sellingPrice;
+
+                const displayCost = isNaN(costVal) ? 0 : costVal;
+                const displaySell = isNaN(sellVal) ? 0 : sellVal;
+
+                const markup = displaySell - displayCost;
+                const marginPct = displaySell > 0 ? (markup / displaySell) * 100 : 0;
                 const isLow = p.stock <= p.minStock;
                 
                 // Expiry warnings
@@ -369,6 +597,22 @@ export default function InventoryCatalog({ products, onSaveProduct, onDeleteProd
 
                 return (
                   <tr key={p.id} className="hover:bg-white/2 transition-colors">
+                    {isBulkEditMode && (
+                      <td className="p-4 text-center select-none">
+                        <input
+                          type="checkbox"
+                          className="rounded border-white/10 bg-white/5 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                          checked={selectedProductIds.includes(p.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedProductIds(prev => [...prev, p.id]);
+                            } else {
+                              setSelectedProductIds(prev => prev.filter(id => id !== p.id));
+                            }
+                          }}
+                        />
+                      </td>
+                    )}
                     
                     {/* Item details */}
                     <td className="p-4 font-sans max-w-xs">
@@ -415,7 +659,16 @@ export default function InventoryCatalog({ products, onSaveProduct, onDeleteProd
 
                     {/* Cost */}
                     <td className="p-4 font-mono font-medium text-gray-300">
-                      {editingProduct?.id === p.id ? (
+                      {isBulkEditMode && selectedProductIds.includes(p.id) ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={bulkCostPrices[p.id] !== undefined ? bulkCostPrices[p.id] : p.costPrice}
+                          onChange={(e) => setBulkCostPrices(prev => ({ ...prev, [p.id]: e.target.value }))}
+                          className="px-2 py-1 bg-[#0A0A0B] border border-white/10 text-white rounded w-16 text-xs outline-none focus:border-amber-500"
+                        />
+                      ) : editingProduct?.id === p.id ? (
                         <input
                           type="number"
                           step="0.01"
@@ -430,7 +683,16 @@ export default function InventoryCatalog({ products, onSaveProduct, onDeleteProd
 
                     {/* Retail */}
                     <td className="p-4 font-mono font-bold text-white">
-                      {editingProduct?.id === p.id ? (
+                      {isBulkEditMode && selectedProductIds.includes(p.id) ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={bulkSellingPrices[p.id] !== undefined ? bulkSellingPrices[p.id] : p.sellingPrice}
+                          onChange={(e) => setBulkSellingPrices(prev => ({ ...prev, [p.id]: e.target.value }))}
+                          className="px-2 py-1 bg-[#0A0A0B] border border-white/10 text-white rounded w-16 text-xs outline-none focus:border-amber-500"
+                        />
+                      ) : editingProduct?.id === p.id ? (
                         <input
                           type="number"
                           step="0.01"
@@ -473,7 +735,7 @@ export default function InventoryCatalog({ products, onSaveProduct, onDeleteProd
                         )}
 
                         {/* Fast additive +/- quick click triggers */}
-                        {editingProduct?.id !== p.id && (
+                        {editingProduct?.id !== p.id && !isBulkEditMode && (
                           <div className="flex flex-col gap-0.5 ml-2.5">
                             <button
                               onClick={() => handleUpdateStock(p, 5)}
@@ -520,7 +782,15 @@ export default function InventoryCatalog({ products, onSaveProduct, onDeleteProd
 
                     {/* Actions edit / delete buttons */}
                     <td className="p-4 text-right">
-                      {editingProduct?.id === p.id ? (
+                      {isBulkEditMode ? (
+                        <span className="text-[10px] font-mono font-bold uppercase tracking-wide">
+                          {selectedProductIds.includes(p.id) ? (
+                            <span className="text-amber-500">Editing...</span>
+                          ) : (
+                            <span className="text-gray-500">Unselected</span>
+                          )}
+                        </span>
+                      ) : editingProduct?.id === p.id ? (
                         <div className="flex gap-1 justify-end">
                           <button
                             onClick={handleSaveEdit}

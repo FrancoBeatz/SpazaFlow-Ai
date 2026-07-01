@@ -33,7 +33,7 @@ import {
 } from './data/seedData';
 import {
   apiSignIn, apiSignUp, apiGetMe, apiGetBusinesses, apiCreateBusiness, apiUpdateBusinessTier,
-  apiGetProducts, apiCreateProduct, apiUpdateProduct, apiDeleteProduct,
+  apiGetProducts, apiCreateProduct, apiUpdateProduct, apiDeleteProduct, apiBulkUpdateProductPrices,
   apiGetSales, apiCreateSale, apiGetExpenses, apiCreateExpense,
   apiGetSuppliers, apiCreateSupplier, apiGetMarketplaceProducts,
   apiGetSupplierOrders, apiCreateSupplierOrder, apiUpdateSupplierOrder,
@@ -137,6 +137,9 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [toastNotif, setToastNotif] = useState<string | null>(null);
 
+  // Connection and Network state
+  const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
+
   // Signin/Signup form state
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -186,6 +189,26 @@ export default function App() {
       return () => clearTimeout(clock);
     }
   }, [toastNotif]);
+
+  // Network connection status detection listeners
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      setToastNotif("🟢 Connected! Operating in live cloud synchronize mode.");
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      setToastNotif("🔴 Connection lost. Operating in offline local state mode.");
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   // Sandbox fallback mode session loader
   useEffect(() => {
@@ -334,6 +357,18 @@ export default function App() {
       setToastNotif(`❌ Product deleted.`);
     } catch (err: any) {
       alert("Failed to delete product: " + err.message);
+    }
+  };
+
+  const handleBulkUpdatePrices = async (updates: { id: string; costPrice: number; sellingPrice: number }[]) => {
+    try {
+      await apiBulkUpdateProductPrices(updates);
+      logUserAction('Bulk Price Edit', `Updated prices/costs in bulk for ${updates.length} products`);
+      setToastNotif(`✏️ Bulk updated ${updates.length} products!`);
+      await fetchTenantDataset();
+    } catch (err: any) {
+      alert("Failed to bulk update products: " + err.message);
+      throw err;
     }
   };
 
@@ -1044,6 +1079,18 @@ export default function App() {
             </button>
           </div>
 
+          {/* Dynamic Network Connection Status Pill */}
+          <div className="flex items-center select-none" id="network_status_indicator">
+            <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wide border font-mono transition-all duration-300 ${
+              isOnline
+                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/15'
+                : 'bg-rose-500/10 text-rose-400 border-rose-500/15 animate-pulse'
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-emerald-400 shadow-sm shadow-emerald-400/50' : 'bg-rose-500 shadow-sm shadow-rose-500/50'}`} />
+              <span>{isOnline ? 'Online' : 'Offline'}</span>
+            </span>
+          </div>
+
           {/* Health Indicators */}
           {health && (
             <div className="flex items-center gap-4 select-none">
@@ -1294,6 +1341,7 @@ export default function App() {
                   products={products} 
                   onSaveProduct={handleSaveProduct} 
                   onDeleteProduct={handleDeleteProduct} 
+                  onBulkUpdatePrices={handleBulkUpdatePrices}
                 />
               )}
 
