@@ -276,6 +276,20 @@ CREATE TABLE IF NOT EXISTS public.settings (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 22b. CREATE COMMUNITY MARKETPLACE TABLE (Township-wide surplus stock trading)
+CREATE TABLE IF NOT EXISTS public.community_marketplace (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  owner_spaza_name TEXT NOT NULL,
+  owner_phone TEXT NOT NULL,
+  product_name TEXT NOT NULL,
+  quantity INT NOT NULL,
+  asking_price NUMERIC(10,2) NOT NULL,
+  location TEXT NOT NULL,
+  status TEXT DEFAULT 'Available', -- 'Available', 'Accepted', 'Sold'
+  description TEXT,
+  timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
 
 -- 23. ENABLE ROW LEVEL SECURITY (RLS) ON ALL TABLES
 ALTER TABLE public.businesses ENABLE ROW LEVEL SECURITY;
@@ -299,6 +313,7 @@ ALTER TABLE public.activity_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ai_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.community_marketplace ENABLE ROW LEVEL SECURITY;
 
 
 -- 24. CREATE RLS POLICIES FOR SECURE MULTI-TENANT ISOLATION
@@ -471,4 +486,8 @@ CREATE POLICY settings_isolation ON public.settings
     (auth.role() = 'authenticated' AND business_id = (SELECT current_business_id FROM public.profiles WHERE profiles.id = auth.uid()))
     OR (auth.role() = 'anon')
   );
+
+-- Community Marketplace (Publicly accessible/negotiable trade exchange)
+CREATE POLICY community_marketplace_isolation ON public.community_marketplace
+  FOR ALL USING (true);
 `;

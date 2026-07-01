@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Package, PlusCircle, AlertTriangle, Calendar, Save, Trash2, Tag, ArrowUpRight, Barcode, Upload, RefreshCw } from 'lucide-react';
 import { Product } from '../types';
-import { supabase, hasSupabaseConfig } from '../lib/supabase';
 
 interface InventoryCatalogProps {
   products: Product[];
@@ -72,45 +71,13 @@ export default function InventoryCatalog({ products, onSaveProduct, onDeleteProd
   };
 
   const uploadFileProcess = async (file: File) => {
-    if (hasSupabaseConfig && supabase) {
-      setUploadingImage(true);
-      try {
-        const fileExt = file.name.split('.').pop();
-        const fileName = `${Date.now()}-${Math.floor(Math.random() * 1000)}.${fileExt}`;
-        const filePath = `product-pics/${fileName}`;
-
-        // Upload file to Supabase storage bucket called 'products'
-        const { error: uploadError } = await supabase.storage
-          .from('products')
-          .upload(filePath, file, {
-            cacheControl: '3600',
-            upsert: false
-          });
-
-        if (uploadError) {
-          throw uploadError;
-        }
-
-        // Retrieve public URL
-        const { data: { publicUrl } } = supabase.storage
-          .from('products')
-          .getPublicUrl(filePath);
-
-        setImageUrl(publicUrl);
-      } catch (err: any) {
-        alert("Upload error: " + (err.message || err));
-      } finally {
-        setUploadingImage(false);
-      }
-    } else {
-      // Offline sandbox local fallback preview
-      setUploadingImage(true);
-      setTimeout(() => {
-        const previewUrl = URL.createObjectURL(file);
-        setImageUrl(previewUrl);
-        setUploadingImage(false);
-      }, 600);
-    }
+    // Offline sandbox local fallback preview
+    setUploadingImage(true);
+    setTimeout(() => {
+      const previewUrl = URL.createObjectURL(file);
+      setImageUrl(previewUrl);
+      setUploadingImage(false);
+    }, 600);
   };
 
   const handleFileDrop = async (e: React.DragEvent) => {
